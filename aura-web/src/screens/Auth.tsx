@@ -6,6 +6,7 @@ import {
   Laptop, Moon, Building2, Dumbbell, Utensils, Settings2, ArrowLeft, ArrowRight, Target, Globe, Github, Apple,
 } from 'lucide-react';
 import { AuraAvatar, AuraLogo, AppLogo, HudInput, IconBox, NeonButton, Toggle, Wave } from '../components/aura';
+import { signInWithGoogle, signInWithEmail, signUpWithEmail, AuthNotConfiguredError } from '../services/auth';
 
 function Stage({ children }: { children: ReactNode }) {
   return (
@@ -24,7 +25,18 @@ function PasswordToggle({ show, onToggle }: { show: boolean; onToggle: () => voi
   );
 }
 
-function Social({ providers }: { providers: ('google' | 'apple' | 'microsoft' | 'github')[] }) {
+function Social({ providers, onError }: { providers: ('google' | 'apple' | 'microsoft' | 'github')[]; onError?: (msg: string) => void }) {
+  const handleClick = async (provider: 'google' | 'apple' | 'microsoft' | 'github') => {
+    if (provider !== 'google') {
+      onError?.(`${provider[0].toUpperCase()}${provider.slice(1)} sign-in isn't wired up yet — use Google or email.`);
+      return;
+    }
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      onError?.(err instanceof AuthNotConfiguredError ? err.message : 'Google sign-in failed. Please try again.');
+    }
+  };
   const glyph = {
     google: <span style={{ font: '800 24px Inter', background: 'conic-gradient(from -45deg, #ea4335 0 25%, #fbbc05 0 50%, #34a853 0 75%, #4285f4 0)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>G</span>,
     apple: <Apple size={24} color="#fff" fill="#fff" />,
@@ -40,7 +52,7 @@ function Social({ providers }: { providers: ('google' | 'apple' | 'microsoft' | 
     <>
       <div className="divider">Or continue with</div>
       <div className="social">
-        {providers.map((p) => <button key={p} type="button" className="icon-btn" aria-label={`Continue with ${p}`}>{glyph[p]}</button>)}
+        {providers.map((p) => <button key={p} type="button" className="icon-btn" aria-label={`Continue with ${p}`} onClick={() => handleClick(p)}>{glyph[p]}</button>)}
       </div>
     </>
   );
@@ -144,12 +156,19 @@ export function Login() {
   const [remember, setRemember] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!email.trim() || !pw) return setErr('Enter your username/email and password.');
     setErr('');
     setBusy(true);
-    setTimeout(() => nav('/dashboard'), 700);
+    try {
+      await signInWithEmail(email, pw);
+      nav('/dashboard');
+    } catch (err) {
+      setErr(err instanceof AuthNotConfiguredError ? err.message : err instanceof Error ? err.message : 'Login failed.');
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <Stage>
@@ -173,7 +192,7 @@ export function Login() {
           </div>
           {err && <div className="tag red" role="alert" style={{ padding: 8 }}>{err}</div>}
           <NeonButton variant="primary" size="lg" hex display chevron block disabled={busy} type="submit">{busy ? <span className="spinner" /> : 'LOGIN'}</NeonButton>
-          <Social providers={['google', 'microsoft', 'github']} />
+          <Social providers={['google', 'microsoft', 'github']} onError={setErr} />
           <p className="t-sub" style={{ textAlign: 'center', fontSize: 14 }}>Don't have an account? <Link to="/signup" className="c-blue" style={{ fontWeight: 600 }}>Sign Up</Link></p>
         </form>
       </div>
@@ -189,15 +208,24 @@ export function Signup() {
   const [show, setShow] = useState({ pw: false, confirm: false });
   const [agree, setAgree] = useState(false);
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: ChangeEvent<HTMLInputElement>) => setF((s) => ({ ...s, [k]: e.target.value }));
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!f.name.trim() || !/\S+@\S+\.\S+/.test(f.email)) return setErr('Enter your full name and a valid email.');
     if (f.pw.length < 8) return setErr('Password must be at least 8 characters.');
     if (f.pw !== f.confirm) return setErr('Passwords do not match.');
     if (!agree) return setErr('Please accept the Terms of Service and Privacy Policy.');
     setErr('');
-    nav('/onboarding');
+    setBusy(true);
+    try {
+      await signUpWithEmail(f.email, f.pw, f.name);
+      nav('/onboarding');
+    } catch (err_) {
+      setErr(err_ instanceof AuthNotConfiguredError ? err_.message : err_ instanceof Error ? err_.message : 'Sign up failed.');
+    } finally {
+      setBusy(false);
+    }
   };
   const feats = [
     { icon: Brain, t: 'Personalized Intelligence', s: 'Learns your preferences' },
@@ -250,8 +278,8 @@ export function Signup() {
                 <span>I agree to the <a className="c-blue" href="#terms">Terms of Service</a> and <a className="c-blue" href="#privacy">Privacy Policy</a></span>
               </label>
               {err && <div className="tag red" style={{ padding: 8, whiteSpace: 'normal' }} role="alert">{err}</div>}
-              <NeonButton variant="primary" size="lg" hex display chevron block type="submit">SIGN UP</NeonButton>
-              <Social providers={['google', 'apple', 'microsoft']} />
+              <NeonButton variant="primary" size="lg" hex display chevron block type="submit" disabled={busy}>{busy ? <span className="spinner" /> : 'SIGN UP'}</NeonButton>
+              <Social providers={['google', 'apple', 'microsoft']} onError={setErr} />
             </form>
           </div>
         </div>
