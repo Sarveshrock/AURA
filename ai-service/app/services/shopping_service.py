@@ -20,7 +20,7 @@ class ShoppingServiceError(Exception):
 class ShoppingResult(BaseModel):
     title: str
     price: float | None
-    currency: str = "USD"
+    currency: str = "INR"
     source: str  # retailer/platform name
     link: str
     thumbnail: str | None = None
@@ -50,6 +50,8 @@ async def search_products(query: str, *, max_results: int = 20) -> list[Shopping
                 "q": query,
                 "api_key": settings.serpapi_api_key,
                 "num": max_results,
+                "gl": settings.default_country,
+                "hl": "en",
             },
         )
     if resp.status_code >= 400:
@@ -67,6 +69,7 @@ async def search_products(query: str, *, max_results: int = 20) -> list[Shopping
             ShoppingResult(
                 title=item.get("title", "Unknown product"),
                 price=price,
+                currency=settings.default_currency,
                 source=item.get("source", "Unknown retailer"),
                 link=item.get("product_link") or item.get("link") or "",
                 thumbnail=item.get("thumbnail"),

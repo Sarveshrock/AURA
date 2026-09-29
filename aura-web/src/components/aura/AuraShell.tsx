@@ -5,10 +5,10 @@ import {
   BrainCircuit, RefreshCcw, LayoutGrid, Settings, Bell, Crown, Menu, ChevronDown, BarChart3, HelpCircle, Network,
   type LucideIcon,
 } from 'lucide-react';
-import { ToastHost, Wave } from '../ui';
-import { StatusBadge } from './controls';
+import { ToastHost } from '../ui';
 import { SearchProvider, useSearchCtx } from '../../state/search';
-import { user } from '../../data/mock';
+import { useUser } from '../../state/user';
+import PeriodReminder from '../wellness/PeriodReminder';
 
 export interface NavItem { to: string; label: string; icon: LucideIcon }
 
@@ -95,7 +95,7 @@ export function AuraSidebar({ open }: { open: boolean }) {
       <div className="pro-card">
         <b><Crown size={17} className="c-amber" style={{ filter: 'drop-shadow(0 0 5px var(--aura-warning))' }} /> AURA PRO</b>
         Unlock advanced agents and automation.
-        <button className="btn primary sm block" style={{ marginTop: 10 }} onClick={() => nav('/pricing')}>Upgrade</button>
+        <button className="btn primary sm block" style={{ marginTop: 10 }} onClick={() => nav('/pricing')}>View plans</button>
       </div>
     </aside>
   );
@@ -103,6 +103,7 @@ export function AuraSidebar({ open }: { open: boolean }) {
 
 export function AuraTopbar({ onMenu, onPalette }: { onMenu: () => void; onPalette: () => void }) {
   const now = useClock();
+  const user = useUser();
   const nav = useNavigate();
   const loc = useLocation();
   const { query: q, setQuery: setQ, local } = useSearchCtx();
@@ -117,28 +118,16 @@ export function AuraTopbar({ onMenu, onPalette }: { onMenu: () => void; onPalett
         <button type="button" className="kbd" onClick={onPalette} aria-label="Open command palette">Ctrl + K</button>
       </form>
       <div className="topbar-right">
-        {base === '/dashboard' && <div className="sys-status">
-          <span className="ring" aria-hidden />
-          <div>
-            <div className="hud-label" style={{ color: 'var(--aura-text-2)', fontSize: 9.5 }}>System status</div>
-            <Wave bars={16} idle />
-          </div>
-          <div className="stack" style={{ gap: 3 }}>
-            <StatusBadge status="online" label="Online" />
-            <StatusBadge status="active" label="All Agents Active" pulse={false} />
-          </div>
-        </div>}
         <div className="clock">
           {now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
           <br />
           <b>{now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</b>
         </div>
-        <button className="icon-btn bare" aria-label="Notifications, 3 unread">
+        <button className="icon-btn bare" aria-label="Notifications" onClick={() => nav('/chat?q=' + encodeURIComponent('What needs my attention today?'))}>
           <Bell size={21} />
-          <span className="badge-dot">3</span>
         </button>
         <button className="user-chip" style={{ background: 'none', border: 0 }} onClick={() => nav('/settings')} aria-label="Account settings">
-          <div className="avatar"><img src={user.avatar} alt="" /></div>
+          <div className="avatar">{user.avatar ? <img src={user.avatar} alt="" referrerPolicy="no-referrer" /> : user.initials}</div>
           <div className="who" style={{ lineHeight: 1.3, textAlign: 'left' }}>
             <div className="t-title">{user.name}</div>
             <div className="t-sub">{user.plan}</div>
@@ -229,6 +218,7 @@ export default function AuraShell() {
         <button onClick={() => setOpen(true)}><LayoutGrid size={21} /> More</button>
       </nav>
       {palette && <CommandPalette onClose={() => setPalette(false)} />}
+      <PeriodReminder />
       <ToastHost />
     </div>
     </SearchProvider>

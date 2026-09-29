@@ -78,10 +78,6 @@ export function Bar({ value, tone = 'cyan', gradient }: { value: number; tone?: 
   );
 }
 
-export function DemoFlag({ label = 'DEMO DATA' }: { label?: string }) {
-  return <span className="demo-flag" title="Shown because the related integration is not connected">● {label}</span>;
-}
-
 export function Dot({ tone = 'green', pulse }: { tone?: 'green' | 'amber' | 'cyan' | 'violet' | 'off'; pulse?: boolean }) {
   return <span className={`dot ${tone !== 'green' ? tone : ''} ${pulse ? 'pulse' : ''}`} />;
 }

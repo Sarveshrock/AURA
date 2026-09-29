@@ -59,7 +59,7 @@ Required for each capability:
 | Database/Auth | `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | https://supabase.com/dashboard |
 | Google Sign-In + Calendar | Configured in Supabase Dashboard → Authentication → Providers → Google (Client ID/Secret from Google Cloud Console) | https://console.cloud.google.com/ |
 
-**Database schema**: [supabase/migrations/0001_init.sql](supabase/migrations/0001_init.sql) creates every table the backend routes use (tasks, calendar, shopping, travel, finance, wellness, research, memory_items with pgvector, automations, integrations, notifications, agents, decision_sessions, approvals, audit_logs, conversations) with Row Level Security. Apply it once: Supabase Dashboard → SQL Editor → paste the file → Run (or `supabase db push` with the CLI).
+**Database schema**: run both files in Supabase Dashboard → SQL Editor (in order): [0001_init.sql](supabase/migrations/0001_init.sql) creates the typed domain tables with Row Level Security, and [0002_app_records.sql](supabase/migrations/0002_app_records.sql) creates `app_records`, the per-user store the web app uses for tasks, events, transactions, budgets, goals, memories, chats, decisions, wellness logs and more. **The app cannot save anything until 0002 is applied.**
 
 Frontend also needs `aura-web/.env` (public values only — no secrets):
 ```bash
@@ -121,9 +121,29 @@ Python (`ai-service/app`):
 /ai/shopping/search /ai/travel/flights /ai/travel/hotels /ai/research/search
 ```
 
-## What's real vs. scaffolded
+## Data: nothing is mocked
 
-- **Working and verified live**: Express + FastAPI servers, NVIDIA NIM chat, Gemini TTS, keyword-routed multi-agent Coordinator, SerpAPI cross-platform shopping price comparison, SerpAPI flight + hotel search (both sorted lowest-first), arXiv research search, Google Calendar route (pending a connected Google account), Supabase-backed generic CRUD routes (RLS-enforced), Docker images + compose, health checks, structured error handling, rate limiting.
-- **Needs your input to fully go live**: a Supabase project + schema (spec §38) for auth/RLS to actually apply; a Google Cloud OAuth client configured in Supabase's Google provider for real Sign-In + Calendar access.
-- **Deliberately not attempted**: a generic "every shopping platform" integration — real per-retailer APIs (Amazon, Flipkart, etc.) each require an individually approved partner/affiliate account, not just an API key. SerpAPI's Google Shopping aggregation is the realistic substitute. Same reasoning applies to Finance (real bank data needs a Plaid-equivalent with business approval) — it stays on manual/mock entry.
-- **Not yet built**: Supabase schema/migrations, real-time Socket.IO event publishing from agents, React Native migration of the frontend (currently a Vite/React web app), and wiring the screens' UI to these new live endpoints. This pass connected the **Login/Signup screens** to real Supabase Auth (including Google sign-in) end-to-end, and verified the Shopping/Travel/Research backend+AI-service endpoints live via direct API calls — but the Shopping/Travel/Research/Calendar *screens themselves* still render their original mock/demo data and need their fetch logic pointed at the new endpoints (`VITE_API_URL` + the routes listed above) as a follow-up.
+The web app ships with **no sample data**. Every screen starts empty and fills from one of these sources:
+
+| Area | Source |
+|---|---|
+| Tasks, Calendar events, Finance (transactions, budgets, goals), Memory, Wellness (plan, meals, daily stats, habits, metrics), Automations, Chat history, Decisions, Agent settings, cart/wishlist | Your own records, saved per user through `/records/:collection` (Supabase + RLS) |
+| Google Calendar events | Google Calendar API, after Google sign-in (read-only in the UI) |
+| Shopping prices | SerpAPI Google Shopping (India, ₹), cheapest first |
+| Flights and hotels | SerpAPI Google Flights / Hotels (India, ₹), cheapest first |
+| Research papers | arXiv API |
+| Chat, decisions, plans, summaries, spoken replies | NVIDIA NIM (LLM) and Gemini TTS through the backend |
+| Weather (Home) | Open-Meteo, only after you allow location access |
+
+Behavior worth knowing:
+- **Nothing is executed on your behalf.** Approvals are recorded (`approvals` table) but no provider integration books, buys or sends. AURA never claims an external action succeeded.
+- **Automations** "run" by asking AURA to prepare the actions and logging them for review.
+- **Pricing/billing** has no payment provider: choosing a paid plan saves your interest and charges nothing.
+- **Settings → Privacy** lets you export all your data (JSON) or delete it (`GET` / `DELETE /records`).
+- Shopping/travel locale defaults to India/INR (`DEFAULT_COUNTRY`, `DEFAULT_CURRENCY` in `ai-service/.env`).
+
+## Not built yet
+
+- Per-retailer shopping APIs (each needs an approved partner account), real banking data, and email/food/cab integrations.
+- Enforcement of agent autonomy levels on the server (the settings are saved but not yet enforced by a policy engine).
+- Real-time Socket.IO agent events, file uploads (files are referenced, not stored), and the React Native migration (the frontend is a Vite/React web app).

@@ -15,13 +15,21 @@ import { shoppingRouter } from './routes/shopping.js';
 import { travelRouter } from './routes/travel.js';
 import { researchRouter } from './routes/research.js';
 import { calendarRouter } from './routes/calendar.js';
+import { recordsRouter } from './routes/records.js';
 import { createResourceRouter } from './routes/resource.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: env.corsOrigins, credentials: true }));
+// In development Vite may pick any free port, so accept any localhost origin; production uses the CORS_ORIGINS allowlist only.
+const isLocalOrigin = (origin: string) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+app.use(
+  cors({
+    origin: (origin, cb) => cb(null, !origin || env.corsOrigins.includes(origin) || (env.nodeEnv !== 'production' && isLocalOrigin(origin))),
+    credentials: true,
+  }),
+);
 app.use(express.json({ limit: '2mb' }));
 app.use(pinoHttp({ redact: ['req.headers.authorization'] }));
 app.use(
@@ -42,6 +50,7 @@ app.use('/shopping', shoppingRouter);
 app.use('/travel', travelRouter);
 app.use('/research', researchRouter);
 app.use('/calendar', calendarRouter);
+app.use('/records', recordsRouter);
 
 // Domain resources backed directly by Supabase tables (RLS-enforced).
 // Bespoke business logic can replace any of these incrementally.

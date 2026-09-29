@@ -55,11 +55,11 @@ export function CommandInput({ value, onChange, onSubmit, placeholder = 'Ask AUR
 
 /* ---------- NeonTabs ---------- */
 
-export function NeonTabs<T extends string>({ tabs, value, onChange, stretch, counts, icons }: {
-  tabs: readonly T[]; value: T; onChange: (t: T) => void; stretch?: boolean; counts?: Partial<Record<T, number>>; icons?: Partial<Record<T, LucideIcon>>;
+export function NeonTabs<T extends string>({ tabs, value, onChange, stretch, wrap, counts, icons }: {
+  tabs: readonly T[]; value: T; onChange: (t: T) => void; stretch?: boolean; /** Wrap onto several lines instead of scrolling sideways, so no tab is ever hidden. */ wrap?: boolean; counts?: Partial<Record<T, number>>; icons?: Partial<Record<T, LucideIcon>>;
 }) {
   return (
-    <div className="tabs" role="tablist">
+    <div className={`tabs ${wrap ? "wrap" : ""}`} role="tablist">
       {tabs.map((t) => {
         const I = icons?.[t] as LucideIcon | undefined;
         return (

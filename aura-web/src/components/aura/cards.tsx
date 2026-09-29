@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { ChevronRight, MoreVertical, TrendingDown, TrendingUp, type LucideIcon } from 'lucide-react';
 import { Hud, IconBox, Bar, toneHex, type Tone } from '../ui';
 import { StatusBadge, type StatusKind } from './controls';
-import type { Agent } from '../../data/mock';
+import type { Agent } from '../../data/agents';
 
 /* Blue base art → tint per agent tone (hue-rotate from ~210°) */
 export const hueFor: Record<Tone, number> = { blue: 0, cyan: -25, teal: -55, green: -55, violet: 55, magenta: 105, pink: 105, amber: 195, red: 150 };

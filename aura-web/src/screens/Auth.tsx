@@ -5,8 +5,9 @@ import {
   Briefcase, HeartPulse, BarChart3, Plane, BookOpen, Leaf, ShoppingCart, Users, MoreHorizontal, Clock, Sun,
   Laptop, Moon, Building2, Dumbbell, Utensils, Settings2, ArrowLeft, ArrowRight, Target, Globe, Github, Apple,
 } from 'lucide-react';
-import { AuraAvatar, AuraLogo, AppLogo, HudInput, IconBox, NeonButton, Toggle, Wave } from '../components/aura';
+import { AuraAvatar, AuraLogo, AppLogo, HudInput, IconBox, NeonButton, Wave } from '../components/aura';
 import { signInWithGoogle, signInWithEmail, signUpWithEmail, AuthNotConfiguredError } from '../services/auth';
+import { profileStore } from '../state/stores';
 
 function Stage({ children }: { children: ReactNode }) {
   return (
@@ -303,7 +304,7 @@ const goals: { label: string; icon: typeof Brain }[] = [
   { label: 'Other (Custom)', icon: MoreHorizontal },
 ];
 
-const routine: { icon: typeof Brain; label: string; opts: string[] }[] = [
+const routine_: { icon: typeof Brain; label: string; opts: string[] }[] = [
   { icon: Sun, label: 'Wake up time', opts: ['07:00 AM', '06:00 AM', '08:00 AM'] },
   { icon: Laptop, label: 'Work / Study hours', opts: ['09:00 AM – 06:00 PM', '10:00 AM – 07:00 PM', 'Flexible'] },
   { icon: Moon, label: 'Sleep time', opts: ['11:30 PM', '10:30 PM', '12:30 AM'] },
@@ -313,22 +314,30 @@ const routine: { icon: typeof Brain; label: string; opts: string[] }[] = [
 ];
 
 const prefs: [string, string[]][] = [
+  ['Gender', ['Prefer not to say', 'Female', 'Male', 'Non-binary']],
   ['Communication Style', ['Friendly & Professional', 'Concise', 'Detailed']],
   ['Response Detail Level', ['Balanced', 'Brief', 'In-depth']],
   ['Decision Style', ['Suggest with Explanation', 'Suggest Only', 'Prepare for Approval']],
   ['Language', ['English', 'Hindi', 'Marathi']],
 ];
 
-const appDesc: Record<string, string> = {
-  'Google Calendar': 'Sync meetings and events', Gmail: 'Manage and summarize emails', 'Google Maps': 'Travel, location and commute',
-  'Zomato / Swiggy': 'Food recommendations', Amazon: 'Shopping and price tracking', 'Phone (Permissions)': 'Calls, SMS (with consent)', Weather: 'Weather alerts and travel planning',
-};
-
 export function Personalize() {
   const nav = useNavigate();
   const [sel, setSel] = useState<string[]>(['Career Growth', 'Financial Stability', 'Better Productivity']);
-  const [apps, setApps] = useState<Record<string, boolean>>({ 'Google Calendar': true, Gmail: false, 'Google Maps': true, 'Zomato / Swiggy': false, Amazon: false, 'Phone (Permissions)': false, Weather: true });
-  const [privacy, setPrivacy] = useState({ learn: true, personal: true, proactive: true });
+  const [routineVals, setRoutineVals] = useState<Record<string, string>>({});
+  const [prefVals, setPrefVals] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const finish = async () => {
+    setSaving(true);
+    try {
+      const routine = Object.fromEntries(routine_.map((r) => [r.label, routineVals[r.label] ?? r.opts[0]]));
+      const preferences = Object.fromEntries(prefs.map(([label, opts]) => [label, prefVals[label] ?? opts[0]]));
+      profileStore.set([{ id: 'me', goals: sel, routine, preferences }]);
+    } finally {
+      setSaving(false);
+      nav('/dashboard');
+    }
+  };
   const toggleGoal = (g: string) => setSel((s) => (s.includes(g) ? s.filter((x) => x !== g) : [...s, g]));
 
   return (
@@ -384,11 +393,11 @@ export function Personalize() {
             <div className="hud corners">
               <div className="hud-head"><IconBox icon={Clock} round /><div><h3>Your Daily Routine</h3><div className="sub">Help AURA understand your typical day</div></div></div>
               <div className="list">
-                {routine.map((r) => (
+                {routine_.map((r) => (
                   <div className="li" key={r.label}>
                     <r.icon size={20} className="c-cyan" />
                     <label className="grow" htmlFor={`rt-${r.label}`}>{r.label}</label>
-                    <select id={`rt-${r.label}`} className="select" style={{ minWidth: 150 }}>{r.opts.map((o) => <option key={o}>{o}</option>)}</select>
+                    <select id={`rt-${r.label}`} className="select" style={{ minWidth: 150 }} value={routineVals[r.label] ?? r.opts[0]} onChange={(e) => setRoutineVals((v) => ({ ...v, [r.label]: e.target.value }))}>{r.opts.map((o) => <option key={o}>{o}</option>)}</select>
                   </div>
                 ))}
               </div>
@@ -399,7 +408,7 @@ export function Personalize() {
                 {prefs.map(([label, opts]) => (
                   <div className="li" key={label}>
                     <label className="grow" htmlFor={`pf-${label}`}>{label}</label>
-                    <select id={`pf-${label}`} className="select" style={{ minWidth: 'min(220px, 50vw)' }}>{opts.map((o) => <option key={o}>{o}</option>)}</select>
+                    <select id={`pf-${label}`} className="select" style={{ minWidth: 'min(220px, 50vw)' }} value={prefVals[label] ?? opts[0]} onChange={(e) => setPrefVals((v) => ({ ...v, [label]: e.target.value }))}>{opts.map((o) => <option key={o}>{o}</option>)}</select>
                   </div>
                 ))}
               </div>
@@ -407,26 +416,15 @@ export function Personalize() {
           </div>
           <div className="stack">
             <div className="hud corners">
-              <div className="hud-head"><IconBox icon={Network} round /><div><h3>Connect Your Apps</h3><div className="sub">Allow AURA to access these apps for better assistance</div></div></div>
+              <div className="hud-head"><IconBox icon={Network} tone="blue" round /><div><h3>Connect Your Apps</h3><div className="sub">Link Google so AURA can see your real calendar.</div></div></div>
               <div className="list">
-                {Object.entries(apps).map(([name, on]) => (
-                  <div className="li" key={name}>
-                    <AppLogo name={name} size={36} />
-                    <div className="grow"><div className="t-title">{name}</div><div className="t-sub">{appDesc[name]}</div></div>
-                    {on ? <span className="pill-status hide-sm"><span className="dot" /> Connected</span> : <button className="btn sm hide-sm" onClick={() => setApps((a) => ({ ...a, [name]: true }))}>Connect</button>}
-                    <Toggle on={on} onChange={(v) => setApps((a) => ({ ...a, [name]: v }))} label={`Connect ${name}`} />
-                  </div>
-                ))}
+                <div className="li">
+                  <AppLogo name="Google Calendar" size={36} />
+                  <div className="grow"><div className="t-title">Google Calendar</div><div className="t-sub">Sync meetings and events</div></div>
+                  <button type="button" className="btn sm" onClick={() => void signInWithGoogle().catch(() => undefined)}>Connect</button>
+                </div>
               </div>
-            </div>
-            <div className="hud corners">
-              <div className="hud-head"><IconBox icon={ShieldCheck} round /><div><h3>Privacy & Control</h3><div className="sub">You are always in control</div></div></div>
-              <div className="list">
-                {([['learn', 'Allow AURA to learn from my activity'], ['personal', 'Use my data for personalized suggestions'], ['proactive', 'Enable proactive notifications']] as const).map(([k, l]) => (
-                  <div className="li" key={k}><span className="grow">{l}</span><Toggle on={privacy[k]} onChange={(v) => setPrivacy((p) => ({ ...p, [k]: v }))} label={l} /></div>
-                ))}
-              </div>
-              <a href="#privacy" className="c-blue row" style={{ justifyContent: 'flex-end', fontSize: 13 }}>Learn More <ArrowRight size={13} /></a>
+              <p className="t-mute" style={{ marginTop: 8 }}>You can connect or revoke access any time in Integrations. Nothing is shared until you connect.</p>
             </div>
           </div>
         </div>
@@ -434,7 +432,7 @@ export function Personalize() {
         <div className="row between wrap" style={{ gap: 14 }}>
           <NeonButton size="lg" onClick={() => nav('/signup')}><ArrowLeft size={18} /> Back</NeonButton>
           <div className="row hide-sm" aria-hidden><span className="dot off" /><span className="dot off" /><span className="dot cyan" /></div>
-          <NeonButton variant="primary" size="lg" hex chevron onClick={() => nav('/dashboard')} style={{ minWidth: 'min(380px, 100%)' }}>Continue to Command Center</NeonButton>
+          <NeonButton variant="primary" size="lg" hex chevron onClick={() => void finish()} disabled={saving} style={{ minWidth: 'min(380px, 100%)' }}>Continue to Command Center</NeonButton>
         </div>
       </div>
     </Stage>

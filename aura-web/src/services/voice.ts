@@ -3,6 +3,8 @@
  * (keys never ship to the browser); the browser provider below uses the Web Speech API
  * as a local fallback when available.
  */
+import { apiBlob } from './api';
+
 export interface VoiceService {
   readonly supported: boolean;
   listen(onText: (text: string, final: boolean) => void, onEnd: () => void): () => void;
@@ -43,5 +45,36 @@ export const browserVoice: VoiceService = {
     if (typeof speechSynthesis === 'undefined') return;
     speechSynthesis.cancel();
     speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  },
+};
+
+/**
+ * Server-side text-to-speech (Gemini via the backend /voice/speak route; keys never reach the browser).
+ * Falls back to the browser voice if the backend is unavailable. Resolves when playback ends.
+ */
+let currentAudio: HTMLAudioElement | null = null;
+export const serverVoice = {
+  stop() {
+    currentAudio?.pause();
+    currentAudio = null;
+    if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
+  },
+  async speak(text: string): Promise<void> {
+    this.stop();
+    const trimmed = text.slice(0, 1800);
+    try {
+      const blob = await apiBlob('/voice/speak', { text: trimmed });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      currentAudio = audio;
+      await new Promise<void>((resolve, reject) => {
+        audio.onended = () => resolve();
+        audio.onerror = () => reject(new Error('Audio playback failed'));
+        void audio.play().catch(reject);
+      });
+      URL.revokeObjectURL(url);
+    } catch {
+      browserVoice.speak(trimmed);
+    }
   },
 };

@@ -33,3 +33,20 @@ chatRouter.post('/', requireAuth, async (req: AuthedRequest, res, next) => {
     next(err);
   }
 });
+
+const planSchema = z.object({ goal: z.string().min(1).max(2000) });
+
+chatRouter.post('/plan', requireAuth, async (req: AuthedRequest, res, next) => {
+  const parsed = planSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return next(new ApiError(400, parsed.error.issues.map((i) => i.message).join(', ')));
+  }
+  try {
+    res.json(await aiClient.plan({ goal: parsed.data.goal, userId: req.userId ?? 'anonymous' }));
+  } catch (err) {
+    if (err instanceof AiServiceError) {
+      return res.status(503).json({ error: 'AURA planning is temporarily unavailable.' });
+    }
+    next(err);
+  }
+});

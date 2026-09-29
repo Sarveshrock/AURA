@@ -3,6 +3,7 @@ provider (NVIDIA NIM by default, Grok as an alternative) can be swapped
 without touching callers."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -56,15 +57,31 @@ class _OpenAICompatibleProvider(LLMProvider):
         if json_mode and self.supports_json_mode:
             payload["response_format"] = {"type": "json_object"}
 
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
+        # Hosted models occasionally return a transient 5xx or drop the connection; retry those a couple of times.
+        resp: httpx.Response | None = None
+        last_error = ""
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+            except httpx.HTTPError as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                resp = None
+            else:
+                if resp.status_code < 500 and resp.status_code != 429:
+                    break
+                last_error = f"{resp.status_code}: {resp.text[:200]}"
+            if attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
+        if resp is None or resp.status_code >= 500 or resp.status_code == 429:
+            raise LLMServiceError(f"{self.label} is temporarily unavailable ({last_error})")
         if resp.status_code >= 400:
             raise LLMServiceError(f"{self.label} request failed ({resp.status_code}): {resp.text}")
 

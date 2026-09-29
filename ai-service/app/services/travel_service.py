@@ -19,7 +19,7 @@ class TravelServiceError(Exception):
 
 class FlightOffer(BaseModel):
     price: float
-    currency: str = "USD"
+    currency: str = "INR"
     origin: str
     destination: str
     departureAt: str
@@ -35,7 +35,7 @@ class HotelOffer(BaseModel):
     name: str
     pricePerNight: float | None
     totalPrice: float | None
-    currency: str = "USD"
+    currency: str = "INR"
     hotelClass: str | None = None
     rating: float | None = None
     link: str | None = None
@@ -67,7 +67,8 @@ async def search_flights(
             "outbound_date": departure_date,
             "adults": adults,
             "type": 2,  # one-way
-            "currency": "USD",
+            "currency": settings.default_currency,
+            "gl": settings.default_country,
             "hl": "en",
         }
     )
@@ -82,6 +83,7 @@ async def search_flights(
         results.append(
             FlightOffer(
                 price=float(entry.get("price", 0) or 0),
+                currency=settings.default_currency,
                 origin=first.get("departure_airport", {}).get("id", origin.upper()),
                 destination=last.get("arrival_airport", {}).get("id", destination.upper()),
                 departureAt=first.get("departure_airport", {}).get("time", ""),
@@ -108,7 +110,8 @@ async def search_hotels(
             "check_in_date": check_in,
             "check_out_date": check_out,
             "adults": adults,
-            "currency": "USD",
+            "currency": settings.default_currency,
+            "gl": settings.default_country,
             "hl": "en",
         }
     )
@@ -122,6 +125,7 @@ async def search_hotels(
                 name=entry.get("name", "Unknown hotel"),
                 pricePerNight=rate.get("extracted_lowest"),
                 totalPrice=total.get("extracted_lowest"),
+                currency=settings.default_currency,
                 hotelClass=entry.get("hotel_class"),
                 rating=entry.get("overall_rating"),
                 link=entry.get("link"),

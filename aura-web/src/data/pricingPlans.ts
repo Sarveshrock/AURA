@@ -5,7 +5,7 @@ export type PlanId = 'free' | 'pro' | 'team';
 
 export interface PricingPlan { id: PlanId; name: string; tagline: string; monthly: number; icon: LucideIcon; tone: Tone; features: string[]; cta: string; popular?: boolean }
 
-export const mockPricingPlans: PricingPlan[] = [
+export const pricingPlans: PricingPlan[] = [
   { id: 'free', name: 'Free', tagline: 'Get started with AURA', monthly: 0, icon: User, tone: 'blue', cta: 'Current Plan',
     features: ['Basic AI chat', '1 personal assistant agent', 'Simple task automation', 'Connect up to 3 apps', 'Standard response speed', 'Community support'] },
   { id: 'pro', name: 'Pro', tagline: 'Unlock the full power of AURA', monthly: 499, icon: Crown, tone: 'amber', cta: 'Upgrade to Pro', popular: true,

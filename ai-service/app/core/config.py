@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # (Google Flights / Google Hotels engines) — Amadeus's self-service
     # portal was decommissioned, so SerpAPI covers travel too now.
     serpapi_api_key: str = ""
+    # Locale for shopping/flight/hotel results (Google country code + ISO currency).
+    default_country: str = "in"
+    default_currency: str = "INR"
 
 
 settings = Settings()
