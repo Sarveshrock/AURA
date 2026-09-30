@@ -1,4 +1,4 @@
-import { apiGet } from './api';
+import { apiGet, apiSend } from './api';
 import type { Product } from '../data/products';
 
 interface ApiProduct { title: string; price: number | null; currency: string; source: string; link: string; thumbnail?: string | null; rating?: number | null; reviews?: number | null }
@@ -13,4 +13,22 @@ const toProduct = (p: ApiProduct): Product => ({
 export async function searchProducts(q: string): Promise<Product[]> {
   const res = await apiGet<{ data: ApiProduct[] }>('/shopping/search', { q });
   return res.data.filter((p) => p.price !== null && p.price > 0).map(toProduct);
+}
+
+/**
+ * Re-orders results by predicted interest, using the model AURA retrains
+ * daily from the user's like/not-interested feedback. Ranking is a
+ * nice-to-have on top of live price search, so any failure (AI service
+ * down, no model trained yet) just keeps the original price-sorted order.
+ */
+export async function rankSuggestions(products: Product[], category?: string): Promise<Product[]> {
+  if (!products.length) return products;
+  try {
+    const res = await apiSend<{ data: (Product & { interestScore: number })[] }>('POST', '/shopping/suggestions', {
+      products: products.map((p) => ({ ...p, category })),
+    });
+    return res.data;
+  } catch {
+    return products;
+  }
 }

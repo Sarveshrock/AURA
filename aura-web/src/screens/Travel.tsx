@@ -1,12 +1,12 @@
 import { useMemo, useRef, useState } from 'react';
 import {
-  Plane, BedDouble, ArrowLeftRight, Users, Search, Compass, ShieldCheck, Sparkles, ClipboardList, Map, ChevronRight, CalendarDays, BadgeCheck, ArrowUpDown, ExternalLink, MapPinned,
+  Plane, BedDouble, ArrowLeftRight, Users, Search, Compass, ShieldCheck, Sparkles, ClipboardList, Map, ChevronRight, CalendarDays, BadgeCheck, ArrowUpDown, ExternalLink, MapPinned, ThumbsUp, ThumbsDown,
 } from 'lucide-react';
 import { Hud, PageHero, NeonButton, NeonTabs, IconBox, Drawer, FuturisticModal, SyncStatus, toast, type Tone } from '../components/aura';
 import { AICommandPanel, confirmActions, domainAsk, type AIReply } from '../components/ai';
 import { aura } from '../services/aura';
-import { apiGet } from '../services/api';
-import { bookingsStore, tripsStore } from '../state/stores';
+import { apiGet, apiSend } from '../services/api';
+import { bookingsStore, tripsStore, travelFeedbackStore } from '../state/stores';
 import { uid } from '../state/store';
 import type { HotelResult, FlightResult } from '../data/trips';
 
@@ -38,7 +38,7 @@ const toHotel = (h: ApiHotel, i: number): HotelResult => ({
   id: `h${i}`, name: h.name, perNight: h.pricePerNight ?? undefined, total: h.totalPrice ?? undefined, currency: h.currency, stars: h.hotelClass, rating: h.rating, link: h.link,
 });
 
-type Row = { id: string; title: string; sub: string; meta: string; price: number; currency: string; per: string; link?: string };
+type Row = { id: string; title: string; sub: string; meta: string; price: number; currency: string; per: string; link?: string; mode: Mode; provider?: string; rating?: number };
 
 export default function Travel() {
   const bookings = bookingsStore.use();
@@ -68,9 +68,11 @@ export default function Travel() {
       setStatus({ state: 'loading', error: '' });
       try {
         const res = await apiGet<{ data: ApiFlight[] }>('/travel/flights', { origin: o, destination: d, departureDate: dep, adults: pax });
-        setResults(res.data.map(toFlight).map((f) => ({ id: f.id, title: `${f.airline} ${f.code}`.trim(), sub: `${f.dep} → ${f.arr}${f.dur ? ` · ${f.dur}` : ''}`, meta: f.stops, price: f.price, currency: f.currency, per: 'per person', link: f.link })));
+        const rows: Row[] = res.data.map(toFlight).map((f) => ({ id: f.id, title: `${f.airline} ${f.code}`.trim(), sub: `${f.dep} → ${f.arr}${f.dur ? ` · ${f.dur}` : ''}`, meta: f.stops, price: f.price, currency: f.currency, per: 'per person', link: f.link, mode: 'Flights' as const, provider: f.airline }));
+        setResults(rows);
         setSearchedFor(`${place(from) || o} → ${place(to) || d}`);
         setStatus({ state: 'idle', error: '' });
+        void rankResults(rows);
       } catch (e) {
         setStatus({ state: 'error', error: e instanceof Error ? e.message : 'Flight search failed' });
       }
@@ -81,12 +83,35 @@ export default function Travel() {
     setStatus({ state: 'loading', error: '' });
     try {
       const res = await apiGet<{ data: ApiHotel[] }>('/travel/hotels', { destination: place(to), checkInDate: dep, checkOutDate: ret, adults: pax });
-      setResults(res.data.map(toHotel).map((h) => ({ id: h.id, title: h.name, sub: [h.stars, h.rating ? `${h.rating} ★` : ''].filter(Boolean).join(' · '), meta: h.perNight ? `${money(h.perNight, h.currency)} / night` : '', price: h.total ?? h.perNight ?? 0, currency: h.currency, per: 'total stay', link: h.link })).filter((r) => r.price > 0));
+      const rows: Row[] = res.data.map(toHotel).map((h) => ({ id: h.id, title: h.name, sub: [h.stars, h.rating ? `${h.rating} ★` : ''].filter(Boolean).join(' · '), meta: h.perNight ? `${money(h.perNight, h.currency)} / night` : '', price: h.total ?? h.perNight ?? 0, currency: h.currency, per: 'total stay', link: h.link, mode: 'Hotels' as const, rating: h.rating })).filter((r) => r.price > 0);
+      setResults(rows);
       setSearchedFor(place(to));
       setStatus({ state: 'idle', error: '' });
+      void rankResults(rows);
     } catch (e) {
       setStatus({ state: 'error', error: e instanceof Error ? e.message : 'Hotel search failed' });
     }
+  };
+
+  /** Re-orders results by predicted interest once the AI service responds — falls back silently (keeps price order) if unavailable or untrained. */
+  const rankResults = async (rows: Row[]) => {
+    if (!rows.length) return;
+    try {
+      const res = await apiSend<{ data: Row[] }>('POST', '/travel/suggestions', {
+        items: rows.map((r) => ({ ...r, name: r.title, category: r.mode === 'Flights' ? 'flight' : 'hotel' })),
+      });
+      setResults((current) => (current && current[0]?.mode === rows[0].mode ? res.data : current));
+    } catch {
+      /* ranking is a nice-to-have on top of live price search */
+    }
+  };
+
+  /** Snapshots an interested/not-interested reaction for the daily travel interest model. */
+  const recordFeedback = (r: Row, interested: boolean) => {
+    travelFeedbackStore.set((fb) => [
+      ...fb,
+      { id: uid('tfb'), itemId: r.id, interested, mode: r.mode === 'Flights' ? 'flight' : 'hotel', title: r.title, price: r.price, currency: r.currency, provider: r.provider, rating: r.rating, createdAt: new Date().toISOString() },
+    ]);
   };
 
   const context = () => JSON.stringify({
@@ -171,6 +196,8 @@ export default function Travel() {
                       <IconBox icon={Icon} tone={i === 0 && sortBy === 'price' ? 'green' : 'blue'} size="sm" />
                       <div className="grow"><div className="t-title">{r.title} {i === 0 && sortBy === 'price' && <span className="tag green">Lowest</span>}</div><div className="t-sub mono">{[r.sub, r.meta].filter(Boolean).join(' · ')}</div></div>
                       <div style={{ textAlign: 'right' }}><b style={{ fontSize: 16 }}>{money(r.price, r.currency)}</b><div className="t-mute" style={{ fontSize: 11 }}>{r.per}</div></div>
+                      <button className="icon-btn" style={{ width: 30, height: 30 }} onClick={() => { recordFeedback(r, true); toast('Noted — more like this.'); }} aria-label={`Interested in ${r.title}`} title="Interested"><ThumbsUp size={14} /></button>
+                      <button className="icon-btn" style={{ width: 30, height: 30 }} onClick={() => { recordFeedback(r, false); toast('Noted — fewer like this.'); }} aria-label={`Not interested in ${r.title}`} title="Not interested"><ThumbsDown size={14} /></button>
                       <NeonButton size="sm" variant="primary" onClick={() => setBook({ title: r.title, link: r.link, lines: [`${mode}: ${r.title}`, r.sub, mode === 'Flights' ? `${searchedFor} · ${dep}` : `${searchedFor} · ${dep} → ${ret}`, `${money(r.price, r.currency)} ${r.per}`] })}>Book</NeonButton>
                     </div>
                   );
@@ -180,7 +207,7 @@ export default function Travel() {
             </div>
           )}
         </Hud>
-        <SyncStatus stores={[bookingsStore, tripsStore]} />
+        <SyncStatus stores={[bookingsStore, tripsStore, travelFeedbackStore]} />
       </div>
 
       <div className="rail">

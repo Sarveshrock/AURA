@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { CheckCircle2, ArrowRight, ChevronRight, ChevronLeft, ShoppingCart, Mic, Store, ShieldCheck, ExternalLink, Search, BarChart3, CalendarDays } from 'lucide-react';
+import { CheckCircle2, ArrowRight, ChevronRight, ChevronLeft, ShoppingCart, Mic, Store, ShieldCheck, ExternalLink, Search, BarChart3, CalendarDays, Zap } from 'lucide-react';
 import { Hud, PageHero, NeonButton, Toggle, FuturisticModal, SyncStatus, toast, toneHex } from '../components/aura';
 import { AICommandPanel, confirmActions, domainAsk, type AIReply } from '../components/ai';
 import { ProductCard, CartLine, money } from '../components/shopping';
 import { categories, categoryQuery, type Product, type CartLine as CartItem, type ProductCategory, type Subscription } from '../data/products';
-import { cartStore, wishlistStore, subscriptionsStore } from '../state/stores';
+import { cartStore, wishlistStore, subscriptionsStore, shoppingFeedbackStore } from '../state/stores';
 import { uid } from '../state/store';
-import { searchProducts } from '../services/shopping';
+import { searchProducts, rankSuggestions } from '../services/shopping';
+import { extensionStore, quickCartStore, startQuickCart, parseShoppingList, PLATFORM_LABEL, type QuickCartPlatform } from '../services/extension';
 
 const FREQUENCIES = [['Every month', 1], ['Every 2 months', 2], ['Every 3 months', 3]] as const;
 const nextOn = (months: number) => { const d = new Date(); d.setMonth(d.getMonth() + months); return d.toISOString().slice(0, 10); };
@@ -24,6 +25,7 @@ export default function Shopping() {
   const [catStart, setCatStart] = useState(0);
   const [checkout, setCheckout] = useState(false);
   const [reorder, setReorder] = useState({ productId: '', every: 1 });
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const seq = useRef(0);
 
   const run = async (q: string) => {
@@ -36,6 +38,11 @@ export default function Shopping() {
     try {
       const found = await searchProducts(term);
       if (mine === seq.current) { setResults(found); setState({ status: 'idle', error: '' }); }
+      // Re-rank by predicted interest once the AI service responds; falls back
+      // silently (keeps price order) if it's unavailable or has no model yet.
+      void rankSuggestions(found, cat !== 'All' ? cat : undefined).then((ranked) => {
+        if (mine === seq.current) setResults(ranked);
+      });
       return found;
     } catch (e) {
       if (mine === seq.current) { setResults([]); setState({ status: 'error', error: e instanceof Error ? e.message : 'Search failed' }); }
@@ -47,8 +54,21 @@ export default function Shopping() {
 
   const submit = (e: FormEvent) => { e.preventDefault(); setCat('All'); void run(draft); };
 
-  const shown = all ? results : results.slice(0, 10);
-  const lowest = results[0];
+  /** Snapshots an interested/not-interested reaction for the daily interest model. */
+  const recordFeedback = (p: Product, interested: boolean) => {
+    shoppingFeedbackStore.set((fb) => [
+      ...fb,
+      {
+        id: uid('fb'), productId: p.id, interested, name: p.name, price: p.price, currency: p.currency,
+        provider: p.provider, rating: p.rating, reviews: p.reviews, category: cat !== 'All' ? cat : undefined,
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+  };
+
+  const visible = results.filter((p) => !dismissed.has(p.id));
+  const shown = all ? visible : visible.slice(0, 10);
+  const lowest = visible[0];
   const byStore = useMemo(() => {
     const best = new Map<string, Product>();
     for (const p of results) if (!best.has(p.provider)) best.set(p.provider, p);
@@ -80,6 +100,16 @@ export default function Shopping() {
   });
   const chat = domainAsk('shopping', context);
   const ai = async (p: string): Promise<AIReply> => {
+    const orderMatch = p.match(/^(?:order|auto[- ]?order|get)\s+(.+?)\s+(?:from|on)\s+(blinkit|zepto|(?:swiggy\s+)?instamart)\s*$/i);
+    if (orderMatch) {
+      const platform = (/instamart/i.test(orderMatch[2]) ? 'instamart' : orderMatch[2].toLowerCase()) as QuickCartPlatform;
+      const items = parseShoppingList(orderMatch[1]);
+      if (!extensionStore.get().installed) {
+        return { text: `To fill your cart on ${PLATFORM_LABEL[platform]} automatically, install the AURA Cart Assistant browser extension first — see the "Quick Cart" panel on the right.` };
+      }
+      startQuickCart(platform, items);
+      return { text: `Opening ${PLATFORM_LABEL[platform]} and adding ${items.map((i) => (i.qty > 1 ? `${i.name} ×${i.qty}` : i.name)).join(', ')}. I'll stop right before payment — you review the cart and pay yourself.` };
+    }
     const m = p.match(/^(?:find|buy|search(?: for)?|compare|get me|show me)\s+(.+)/i);
     if (!m) return chat(p);
     const term = m[1].replace(/\bunder\s*[\d,.]+\s*k?\b/i, '').trim() || m[1];
@@ -135,8 +165,14 @@ export default function Shopping() {
           <div className="grid g5" style={{ gap: 12 }}>
             {shown.map((p) => (
               <ProductCard key={p.id} p={p} lowest={p.id === lowest?.id} liked={wish.some((w) => w.id === p.id)} inCart={cartQty(p.id)}
-                onLike={() => { const on = wish.some((w) => w.id === p.id); wishlistStore.set((w) => (on ? w.filter((x) => x.id !== p.id) : [...w, p])); toast(on ? 'Removed from wishlist.' : 'Saved to wishlist.'); }}
-                onAdd={() => { addToCart(p); toast('Added to Smart Cart.'); }} />
+                onLike={() => {
+                  const on = wish.some((w) => w.id === p.id);
+                  wishlistStore.set((w) => (on ? w.filter((x) => x.id !== p.id) : [...w, p]));
+                  if (!on) recordFeedback(p, true);
+                  toast(on ? 'Removed from wishlist.' : 'Saved to wishlist.');
+                }}
+                onAdd={() => { addToCart(p); toast('Added to Smart Cart.'); }}
+                onDismiss={() => { setDismissed((d) => new Set(d).add(p.id)); recordFeedback(p, false); toast('Got it — fewer like this.'); }} />
             ))}
           </div>
         </Hud>
@@ -177,14 +213,16 @@ export default function Shopping() {
             ))}
           </div>
           {!subs.length && <div className="empty">No reminders yet.</div>}
-          <div style={{ marginTop: 10 }}><SyncStatus stores={[cartStore, wishlistStore, subscriptionsStore]} /></div>
+          <div style={{ marginTop: 10 }}><SyncStatus stores={[cartStore, wishlistStore, subscriptionsStore, shoppingFeedbackStore]} /></div>
         </Hud>
       </div>
 
       <div className="rail">
         <AICommandPanel title="Need something?" badge={null} icon={Store} header={<p className="t-sub" style={{ marginTop: -6, marginBottom: 10 }}>Just tell me…</p>}
-          prompts={['Find protein powder', 'Find a laptop under 60000', 'Compare wireless earbuds', 'Which store is cheapest for my cart?']} promptStyle="bullets"
+          prompts={['Find protein powder', 'Find a laptop under 60000', 'Compare wireless earbuds', 'Order milk and eggs from Blinkit']} promptStyle="bullets"
           onAsk={ai} cta="Tell AURA to shop" ctaIcon={Mic} placeholder="What do you need?" />
+
+        <QuickCartPanel />
 
         {byStore.length > 1 && (
           <Hud corners title={<span className="row" style={{ gap: 8 }}><BarChart3 size={18} className="c-cyan" /> Cheapest by store</span>}>
@@ -232,5 +270,51 @@ export default function Shopping() {
         </FuturisticModal>
       )}
     </div>
+  );
+}
+
+/**
+ * Hands a shopping list to the AURA Cart Assistant browser extension, which
+ * adds each item to your cart on the chosen platform and stops before
+ * payment — see browser-extension/README.md. Degrades to an install prompt
+ * if the extension isn't present.
+ */
+function QuickCartPanel() {
+  const { installed } = extensionStore.use();
+  const progress = quickCartStore.use();
+  const [platform, setPlatform] = useState<QuickCartPlatform>('blinkit');
+  const [list, setList] = useState('');
+
+  const submit = () => {
+    const items = parseShoppingList(list);
+    if (!items.length) { toast('Add at least one item, e.g. "milk x2, eggs, bread".'); return; }
+    startQuickCart(platform, items);
+  };
+
+  return (
+    <Hud corners title={<span className="row" style={{ gap: 8 }}><Zap size={18} className="c-cyan" /> Quick Cart</span>}>
+      <p className="t-sub" style={{ fontSize: 12.5, marginTop: -6, marginBottom: 10 }}>
+        AURA adds these items to your cart on the store — you review and pay yourself. Never auto-pays.
+      </p>
+      {!installed && (
+        <div className="tag amber" style={{ padding: 8, whiteSpace: 'normal', fontSize: 12, marginBottom: 10 }}>
+          Extension not detected. Install the AURA Cart Assistant (see <code>browser-extension/README.md</code>) to enable this.
+        </div>
+      )}
+      <textarea className="hud-textarea" rows={2} placeholder="milk x2, eggs, bread" value={list} onChange={(e) => setList(e.target.value)} style={{ marginBottom: 8 }} aria-label="Shopping list" />
+      <div className="row wrap" style={{ gap: 8 }}>
+        <select className="select" value={platform} onChange={(e) => setPlatform(e.target.value as QuickCartPlatform)} aria-label="Platform" style={{ flex: 1, minWidth: 140 }}>
+          {(Object.keys(PLATFORM_LABEL) as QuickCartPlatform[]).map((p) => <option key={p} value={p}>{PLATFORM_LABEL[p]}</option>)}
+        </select>
+        <NeonButton variant="primary" onClick={submit} disabled={!list.trim() || progress.status === 'running'}>Fill my cart</NeonButton>
+      </div>
+      {progress.status !== 'idle' && (
+        <div className="t-sub" style={{ fontSize: 12.5, marginTop: 10 }}>
+          {progress.status === 'running' && <span className="row" style={{ gap: 6 }}><span className="spinner" /> {progress.message}</span>}
+          {progress.status === 'done' && <span className="c-green">{progress.message}</span>}
+          {progress.status === 'error' && <span className="c-red">{progress.message}</span>}
+        </div>
+      )}
+    </Hud>
   );
 }

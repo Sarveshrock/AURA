@@ -47,6 +47,9 @@ export const aiClient = {
   searchShopping: (query: string, maxResults = 20) =>
     getAi<unknown[]>('/ai/shopping/search', { q: query, max_results: maxResults }),
 
+  rankShopping: (products: unknown[]) =>
+    callAi<{ data: unknown[]; modelStatus: string }>('/ai/shopping/suggestions', { products }),
+
   searchFlights: (params: { origin: string; destination: string; departureDate: string; adults?: number }) =>
     getAi<unknown[]>('/ai/travel/flights', {
       origin: params.origin,
@@ -62,6 +65,9 @@ export const aiClient = {
       checkOutDate: params.checkOutDate,
       adults: params.adults ?? 2,
     }),
+
+  rankTravel: (items: unknown[]) =>
+    callAi<{ data: unknown[]; modelStatus: string }>('/ai/travel/suggestions', { items }),
 
   searchResearch: (query: string, maxResults = 10) =>
     getAi<unknown[]>('/ai/research/search', { q: query, max_results: maxResults }),

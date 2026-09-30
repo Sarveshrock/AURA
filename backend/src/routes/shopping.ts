@@ -24,4 +24,21 @@ shoppingRouter.get('/search', requireAuth, async (req, res, next) => {
   }
 });
 
+// Also must come before the generic /:id router, for the same reason as /search.
+shoppingRouter.post('/suggestions', requireAuth, async (req, res, next) => {
+  const products = req.body?.products;
+  if (!Array.isArray(products)) {
+    return next(new ApiError(400, '"products" array is required'));
+  }
+  try {
+    const ranked = await aiClient.rankShopping(products);
+    res.json(ranked);
+  } catch (err) {
+    if (err instanceof AiServiceError) {
+      return res.status(503).json({ error: 'Suggestions are temporarily unavailable.' });
+    }
+    next(err);
+  }
+});
+
 shoppingRouter.use('/', createResourceRouter('shopping'));

@@ -1,15 +1,41 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import structlog
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.routers import ai, research, shopping, travel, voice
+from app.services import recommendation_service as reco
 
 logger = structlog.get_logger()
 
-app = FastAPI(title="AURA AI Service", version="0.1.0")
+scheduler = AsyncIOScheduler()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    async def _train_job():
+        for domain in ("shopping", "travel"):
+            try:
+                await reco.train_model(domain)
+            except Exception:
+                logger.exception("interest_model.train.failed", domain=domain)
+
+    # Retrain on startup (picks up anything accumulated since the last
+    # restart) and once every day after that, per "train the model on
+    # interested/not-interested feedback every day" — for every domain.
+    scheduler.add_job(_train_job, "interval", days=1, next_run_time=None, id="train_interest_model")
+    scheduler.start()
+    await _train_job()
+    yield
+    scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="AURA AI Service", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

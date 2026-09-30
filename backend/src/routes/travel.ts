@@ -49,4 +49,21 @@ travelRouter.get('/hotels', requireAuth, async (req, res, next) => {
   }
 });
 
+// Also registered before the generic /:id resource router, same reason as above.
+travelRouter.post('/suggestions', requireAuth, async (req, res, next) => {
+  const items = req.body?.items;
+  if (!Array.isArray(items)) {
+    return next(new ApiError(400, '"items" array is required'));
+  }
+  try {
+    const ranked = await aiClient.rankTravel(items);
+    res.json(ranked);
+  } catch (err) {
+    if (err instanceof AiServiceError) {
+      return res.status(503).json({ error: 'Suggestions are temporarily unavailable.' });
+    }
+    next(err);
+  }
+});
+
 travelRouter.use('/', createResourceRouter('travel'));

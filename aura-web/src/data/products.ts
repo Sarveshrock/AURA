@@ -18,6 +18,25 @@ export interface Product {
 /** A product placed in the smart cart (snapshot of the live listing + quantity). */
 export interface CartLine extends Product { qty: number }
 
+/**
+ * One interested/not-interested signal on a product, snapshotted at the
+ * time the user reacted. AURA's ai-service retrains a daily interest model
+ * from these to rank future suggestions.
+ */
+export interface ProductFeedback {
+  id: string;
+  productId: string;
+  interested: boolean;
+  name: string;
+  price: number;
+  currency: string;
+  provider: string;
+  rating?: number;
+  reviews?: number;
+  category?: string;
+  createdAt: string;
+}
+
 export const categories: { label: 'All' | ProductCategory; icon: LucideIcon; tone: Tone }[] = [
   { label: 'All', icon: ShoppingBag, tone: 'blue' },
   { label: 'Groceries', icon: ShoppingCart, tone: 'green' },

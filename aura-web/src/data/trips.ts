@@ -9,3 +9,21 @@ export interface HotelResult { id: string; name: string; perNight?: number; tota
 export interface Booking { id: string; title: string; detail: string; status: 'Saved' | 'Pending approval' | 'Confirmed'; link?: string }
 
 export interface TripPlan { id: string; destination: string; from?: string; startDate: string; endDate: string; days: { day: string; items: string[] }[] }
+
+/**
+ * One interested/not-interested signal on a flight or hotel result,
+ * snapshotted at the time the user reacted. AURA's ai-service retrains a
+ * daily interest model from these to rank future travel suggestions.
+ */
+export interface TravelFeedback {
+  id: string;
+  itemId: string;
+  interested: boolean;
+  mode: 'flight' | 'hotel';
+  title: string;
+  price: number;
+  currency: string;
+  provider?: string;
+  rating?: number;
+  createdAt: string;
+}

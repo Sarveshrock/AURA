@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     nvidia_api_key: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nvidia_model: str = "mistralai/mistral-nemotron"
+    nvidia_model: str = "deepseek-ai/deepseek-v4.1-flash"
 
     voice_provider: str = "gemini"  # "gemini" | "elevenlabs"
 

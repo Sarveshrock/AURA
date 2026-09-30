@@ -1,4 +1,4 @@
-import { Heart, ShoppingCart, Star, Minus, Plus, Trash2, ExternalLink, Package } from 'lucide-react';
+import { Heart, ShoppingCart, Star, Minus, Plus, Trash2, ExternalLink, Package, X } from 'lucide-react';
 import { NeonButton } from '../aura';
 import type { Product } from '../../data/products';
 
@@ -24,15 +24,22 @@ function Thumb({ src, alt, size }: { src?: string; alt: string; size: number | s
     : <span className="row" style={{ width: size, height: size, justifyContent: 'center' }} aria-hidden><Package size={26} className="t-mute" /></span>;
 }
 
-export function ProductCard({ p, lowest, liked, inCart, onLike, onAdd }: { p: Product; lowest?: boolean; liked: boolean; inCart: number; onLike: () => void; onAdd: () => void }) {
+export function ProductCard({ p, lowest, liked, inCart, onLike, onAdd, onDismiss }: { p: Product; lowest?: boolean; liked: boolean; inCart: number; onLike: () => void; onAdd: () => void; onDismiss?: () => void }) {
   return (
     <article className="tile stack" style={{ gap: 7, padding: 10 }}>
       <div className="media" style={{ height: 118 }}>
         <Thumb src={p.image} alt={p.name} size="100%" />
         {lowest && <span className="media-badge" style={{ background: '#ff4f8b' }}>Lowest price</span>}
-        <button className={`fav-btn ${liked ? 'on' : ''}`} onClick={onLike} aria-pressed={liked} aria-label={liked ? `Remove ${p.name} from wishlist` : `Add ${p.name} to wishlist`}>
-          <Heart size={17} fill={liked ? 'currentColor' : 'none'} />
-        </button>
+        <div className="row" style={{ position: 'absolute', top: 8, right: 8, gap: 6 }}>
+          {onDismiss && (
+            <button className="fav-btn" style={{ position: 'static' }} onClick={onDismiss} aria-label={`Not interested in ${p.name}`} title="Not interested">
+              <X size={15} />
+            </button>
+          )}
+          <button className={`fav-btn ${liked ? 'on' : ''}`} style={{ position: 'static' }} onClick={onLike} aria-pressed={liked} aria-label={liked ? `Remove ${p.name} from wishlist` : `Add ${p.name} to wishlist`}>
+            <Heart size={17} fill={liked ? 'currentColor' : 'none'} />
+          </button>
+        </div>
       </div>
       <h4 className="t-title" style={{ fontSize: 14, minHeight: 38, margin: 0, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{p.name}</h4>
       <div className="t-sub ellipsis" style={{ fontSize: 12 }}>{p.provider}</div>

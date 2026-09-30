@@ -1,7 +1,7 @@
 import { createStore, createRecordStore, recordStores } from './store';
 import type { TaskItem } from '../data/tasks';
 import type { CalendarEvent } from '../data/events';
-import type { CartLine, Product, Subscription } from '../data/products';
+import type { CartLine, Product, ProductFeedback, Subscription } from '../data/products';
 import type { Automation } from '../data/automations';
 import type { Memory } from '../data/memories';
 import type { Transaction } from '../data/transactions';
@@ -9,7 +9,7 @@ import type { Budget } from '../data/budgets';
 import type { Goal } from '../data/goals';
 import type { PlanId } from '../data/pricingPlans';
 import type { Paper, ResearchProject } from '../data/research';
-import type { Booking, TripPlan } from '../data/trips';
+import type { Booking, TravelFeedback, TripPlan } from '../data/trips';
 import type { DayLog, Habit, Meal, Metric, PeriodEntry, PeriodPrefs, PlanItem } from '../data/wellness';
 
 /**
@@ -20,6 +20,8 @@ export const tasksStore = createRecordStore<TaskItem>('tasks');
 export const eventsStore = createRecordStore<CalendarEvent>('events');
 export const cartStore = createRecordStore<CartLine>('cart');
 export const wishlistStore = createRecordStore<Product>('wishlist');
+/** Interested/not-interested reactions on products — trains the daily shopping interest model. */
+export const shoppingFeedbackStore = createRecordStore<ProductFeedback>('shoppingFeedback');
 export const subscriptionsStore = createRecordStore<Subscription>('subscriptions');
 export const automationsStore = createRecordStore<Automation>('automations');
 export const memoriesStore = createRecordStore<Memory>('memories');
@@ -30,6 +32,8 @@ export const savedPapersStore = createRecordStore<Paper>('papers');
 export const projectsStore = createRecordStore<ResearchProject>('research_projects');
 export const bookingsStore = createRecordStore<Booking>('bookings');
 export const tripsStore = createRecordStore<TripPlan>('trips');
+/** Interested/not-interested reactions on flights/hotels — trains the daily travel interest model. */
+export const travelFeedbackStore = createRecordStore<TravelFeedback>('travelFeedback');
 export const wellnessPlanStore = createRecordStore<PlanItem>('wellness_plan');
 export const metricsStore = createRecordStore<Metric>('wellness_metrics');
 export const dayLogsStore = createRecordStore<DayLog>('wellness_logs');
