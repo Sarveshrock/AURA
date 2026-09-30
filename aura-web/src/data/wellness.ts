@@ -25,7 +25,7 @@ export type Flow = 'Light' | 'Medium' | 'Heavy';
 export interface PeriodEntry { id: string; start: string; end?: string; flow?: Flow; note?: string }
 
 /** Supplies and cravings used to prepare a cart the day before a predicted period. Nothing is ordered without approval. */
-export interface PeriodPrefs { id: string; padQuery: string; padQty: number; cravings: string[]; autoPrepare: boolean; /** The predicted start date this reminder was last handled for. */ preparedFor?: string }
+export interface PeriodPrefs { id: string; padQuery: string; padQty: number; cravings: string[]; autoPrepare: boolean; /** The predicted start date this reminder was last handled for. */ preparedFor?: string; /** Hides cycle detail behind a reveal tap; off by default. */ privateMode?: boolean }
 export const DEFAULT_PERIOD_PREFS: PeriodPrefs = { id: 'prefs', padQuery: 'sanitary pads', padQty: 1, cravings: [], autoPrepare: true };
 
 /** Daily reference targets used to scale the weekly chart. */

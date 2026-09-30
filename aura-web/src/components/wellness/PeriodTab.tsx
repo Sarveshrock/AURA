@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Droplets, CalendarClock, Plus, Trash2, ShoppingBag, X, Sparkles, Lightbulb } from 'lucide-react';
+import { Droplets, CalendarClock, Plus, Trash2, ShoppingBag, X, Sparkles, Lightbulb, Lock, Unlock, TrendingUp } from 'lucide-react';
 import { Hud, IconBox, NeonButton, FuturisticModal, HudInput, Toggle, toast } from '../aura';
+import { Companion } from './Companion';
 import SuppliesModal from './SuppliesModal';
 import { addDays, cycleStats, dayDiff, forecast, iso, phaseInfo, phaseOf, type ForecastPeriod, type Phase } from '../../data/cycle';
 import { DEFAULT_PERIOD_PREFS, type Flow, type PeriodEntry, type PeriodPrefs } from '../../data/wellness';
@@ -10,6 +11,7 @@ import { uid } from '../../state/store';
 const FLOWS: Flow[] = ['Light', 'Medium', 'Heavy'];
 const DOW = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 const HORIZONS = [3, 6, 12] as const;
+const SYMPTOM_TAGS = ['Cramps', 'Bloating', 'Headache', 'Fatigue', 'Low mood'];
 const fmt = (d: string, o: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }) => new Date(`${d}T00:00:00`).toLocaleDateString('en-US', o);
 
 /** Ring showing the four phases of an average cycle with a marker for today. */
@@ -83,12 +85,30 @@ export default function PeriodTab() {
   const [dialog, setDialog] = useState<'log' | 'supplies' | null>(null);
   const [form, setForm] = useState<{ start: string; end: string; flow: Flow; note: string }>({ start: today, end: '', flow: 'Medium', note: '' });
   const [craving, setCraving] = useState('');
+  const [revealed, setRevealed] = useState(false);
 
   const daysToNext = cycle.next ? dayDiff(today, cycle.next) : undefined;
   const day = cycle.cycleDay && cycle.cycleDay <= cycle.cycleLen + 14 ? cycle.cycleDay : undefined;
   const phase: Phase | undefined = day ? phaseOf(Math.min(day, cycle.cycleLen), cycle.periodLen, cycle.cycleLen) : undefined;
   const reminderDay = cycle.next ? addDays(cycle.next, -1) : undefined;
   const setPrefs = (p: Partial<PeriodPrefs>) => periodPrefsStore.set([{ ...prefs, ...p, id: 'prefs' }]);
+
+  // Estimates only — "you've logged...", never a diagnosis or a certainty claim.
+  const insights = useMemo(() => {
+    const cycleGaps = cycle.sorted.slice(1).map((e, i) => dayDiff(cycle.sorted[i].start, e.start)).filter((n) => n >= 15 && n <= 60);
+    const flows = cycle.sorted.map((e) => e.flow).filter((f): f is Flow => !!f);
+    const flowCounts = flows.reduce<Record<string, number>>((acc, f) => ({ ...acc, [f]: (acc[f] ?? 0) + 1 }), {});
+    const dominantFlow = Object.entries(flowCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const lines: string[] = [];
+    if (cycleGaps.length >= 2) lines.push(`Your logged cycles have varied between about ${Math.min(...cycleGaps)}–${Math.max(...cycleGaps)} days.`);
+    if (dominantFlow) lines.push(`Your most frequently logged flow is ${dominantFlow}.`);
+    const notes = cycle.sorted.map((e) => e.note?.toLowerCase() ?? '');
+    for (const tag of SYMPTOM_TAGS) {
+      const count = notes.filter((n) => n.includes(tag.toLowerCase())).length;
+      if (count >= 3) lines.push(`You've logged ${tag.toLowerCase()} on ${count} recent cycle entries.`);
+    }
+    return lines;
+  }, [cycle.sorted]);
 
   const savePeriod = (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,9 +128,22 @@ export default function PeriodTab() {
     setCraving('');
   };
 
+  if (prefs.privateMode && !revealed) {
+    return (
+      <Hud corners title="Period Care" icon={Lock}>
+        <div className="stack" style={{ alignItems: 'center', gap: 12, padding: '24px 0' }}>
+          <Companion mood="calm" />
+          <p className="t-sub" style={{ textAlign: 'center', maxWidth: 360 }}>Private Period Mode is on — your cycle details are hidden until you reveal them.</p>
+          <NeonButton icon={Unlock} variant="primary" onClick={() => setRevealed(true)}>Show my cycle</NeonButton>
+          <button className="link c-blue" style={{ background: 'none', border: 0, fontSize: 12.5 }} onClick={() => setPrefs({ privateMode: false })}>Turn off Private Mode</button>
+        </div>
+      </Hud>
+    );
+  }
+
   return (
     <div className="grid g2">
-      <Hud corners title="Where you are in your cycle" icon={Droplets} action="Log period" onAction={() => { setForm({ start: today, end: '', flow: 'Medium', note: '' }); setDialog('log'); }}>
+      <Hud corners title={<span className="row" style={{ gap: 8 }}>🌸 Your cycle</span>} icon={Droplets} action="Log period" onAction={() => { setForm({ start: today, end: '', flow: 'Medium', note: '' }); setDialog('log'); }}>
         <div className="row wrap" style={{ gap: 18, alignItems: 'center' }}>
           <PhaseRing cycleLen={cycle.cycleLen} periodLen={cycle.periodLen} day={day} />
           <div style={{ flex: 1, minWidth: 220 }}>
@@ -159,10 +192,18 @@ export default function PeriodTab() {
         <MonthGrid entries={periods} fc={forecast(cycle, 24, today)} periodLen={cycle.periodLen} today={today} />
       </Hud>
 
+      {insights.length > 0 && (
+        <Hud corners title="Your cycle insights" icon={TrendingUp}>
+          <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.8 }} className="t-sub">{insights.map((l) => <li key={l}>{l}</li>)}</ul>
+          <p className="t-mute" style={{ marginTop: 8 }}>Patterns in your self-reported data, not medical conclusions. If anything here concerns you, it may be worth discussing with a healthcare professional.</p>
+        </Hud>
+      )}
+
       <Hud corners title="Supplies & cravings" icon={ShoppingBag} action="Preview prices" onAction={() => setDialog('supplies')}>
         <p className="t-sub" style={{ marginBottom: 12 }}>The day before your period is expected, AURA finds the lowest live prices for your usual products and cravings and <b style={{ color: '#fff' }}>asks for your approval</b> before adding anything to your cart. It never orders on its own.</p>
         <div className="list">
           <div className="li"><span className="grow">Automatically prepare the day before</span><Toggle on={prefs.autoPrepare} onChange={(v) => setPrefs({ autoPrepare: v })} label="Prepare supplies the day before" /></div>
+          <div className="li"><span className="grow row" style={{ gap: 6 }}><Lock size={14} /> Private Period Mode</span><Toggle on={!!prefs.privateMode} onChange={(v) => setPrefs({ privateMode: v })} label="Hide cycle details behind a reveal tap" /></div>
         </div>
         <div className="form-grid" style={{ marginTop: 10 }}>
           <HudInput label="Usual product" value={prefs.padQuery} onChange={(e) => setPrefs({ padQuery: e.target.value })} placeholder="e.g. Whisper Ultra pads XL" />
@@ -212,6 +253,21 @@ export default function PeriodTab() {
             <HudInput label="Start date" type="date" max={today} value={form.start} onChange={(e) => setForm({ ...form, start: e.target.value })} autoFocus />
             <HudInput label="End date (leave empty if ongoing)" type="date" max={today} value={form.end} onChange={(e) => setForm({ ...form, end: e.target.value })} />
             <div className="field"><label>Flow</label><div className="seg">{FLOWS.map((f) => <button type="button" key={f} className={`chip ${form.flow === f ? 'active' : ''}`} onClick={() => setForm({ ...form, flow: f })}>{f}</button>)}</div></div>
+            <div className="field">
+              <label>How are you feeling? (optional, adds to notes)</label>
+              <div className="row wrap" style={{ gap: 6 }}>
+                {SYMPTOM_TAGS.map((tag) => {
+                  const on = form.note.toLowerCase().includes(tag.toLowerCase());
+                  return (
+                    <button type="button" key={tag} className={`chip ${on ? 'active' : ''}`} onClick={() => {
+                      const parts = form.note.split(',').map((s) => s.trim()).filter(Boolean);
+                      const next = on ? parts.filter((p) => p.toLowerCase() !== tag.toLowerCase()) : [...parts, tag];
+                      setForm({ ...form, note: next.join(', ') });
+                    }}>{tag}</button>
+                  );
+                })}
+              </div>
+            </div>
             <HudInput label="Notes (optional)" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="e.g. cramps, headache" />
             <div className="row" style={{ justifyContent: 'flex-end' }}><NeonButton type="button" onClick={() => setDialog(null)}>Cancel</NeonButton><NeonButton type="submit" variant="primary">Save</NeonButton></div>
           </form>

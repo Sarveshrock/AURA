@@ -6,10 +6,15 @@ import {
 import { Hud, PageHero, NeonButton, NeonTabs, FilterDropdown, FuturisticModal, HudInput, SyncStatus, Bar, toast, toneHex, type Tone } from '../components/aura';
 import { AICommandPanel, domainAsk } from '../components/ai';
 import { PlanRow, MetricRow, MealRow } from '../components/wellness';
+import { VibeCard, XPCard, QuestsCard, JourneyStrip } from '../components/wellness/WorldCards';
+import { AchievementsCard, RecordsCard } from '../components/wellness/Achievements';
+import { MorningMode, WindDownMode } from '../components/wellness/DayModes';
+import Garden from '../components/wellness/Garden';
 import { TARGETS, type DayLog, type PlanArea, type PlanItem, type WellnessIcon } from '../data/wellness';
 import { cycleStats } from '../data/cycle';
+import { computeVibe, computeXP, computeQuests, computeAchievements, computeRecords } from '../data/wellnessWorld';
 import PeriodTab from '../components/wellness/PeriodTab';
-import { wellnessPlanStore, metricsStore, dayLogsStore, mealsStore, habitsStore, periodStore } from '../state/stores';
+import { wellnessPlanStore, metricsStore, dayLogsStore, mealsStore, habitsStore, periodStore, wellnessEventsStore } from '../state/stores';
 import { uid } from '../state/store';
 import { usePageSearch, matches } from '../state/search';
 import { useShowPeriodTracker } from '../state/user';
@@ -52,7 +57,7 @@ function WeeklyChart({ logs, dates }: { logs: Map<string, DayLog>; dates: string
   );
 }
 
-function Breathing({ minutes, title, onClose }: { minutes: number; title: string; onClose: () => void }) {
+function Breathing({ minutes, title, onClose, onFinish }: { minutes: number; title: string; onClose: () => void; onFinish: (minutes: number) => void }) {
   const [left, setLeft] = useState(minutes * 60);
   const [run, setRun] = useState(true);
   useEffect(() => {
@@ -69,7 +74,7 @@ function Breathing({ minutes, title, onClose }: { minutes: number; title: string
         <div className="mono" style={{ fontSize: 28 }}>{String(Math.floor(left / 60)).padStart(2, '0')}:{String(left % 60).padStart(2, '0')}</div>
         <div className="row">
           <NeonButton icon={run ? Pause : Play} onClick={() => setRun((r) => !r)} disabled={left <= 0}>{run ? 'Pause' : 'Resume'}</NeonButton>
-          <NeonButton variant="primary" onClick={() => { onClose(); toast(`${title} finished.`); }}>Finish</NeonButton>
+          <NeonButton variant="primary" onClick={() => { onClose(); onFinish(minutes); toast(`🧘 Mind reset. ${title} finished. +15 XP`); }}>Finish</NeonButton>
         </div>
       </div>
     </FuturisticModal>
@@ -84,6 +89,7 @@ export default function Wellness() {
   const allMeals = mealsStore.use();
   const habits = habitsStore.use();
   const periods = periodStore.use();
+  const events = wellnessEventsStore.use();
   const showPeriod = useShowPeriodTracker();
   const [tabRaw, setTab] = useState<Tab>('Overview');
   const visibleTabs: readonly Tab[] = showPeriod ? TABS : TABS.filter((t) => t !== 'Period Tracker');
@@ -91,6 +97,7 @@ export default function Wellness() {
   const [week, setWeek] = useState<'This Week' | 'Last Week'>('This Week');
   const [session, setSession] = useState<{ title: string; minutes: number } | null>(null);
   const [dialog, setDialog] = useState<'meal' | 'mood' | 'plan' | 'stats' | 'metric' | 'habit' | null>(null);
+  const [dayMode, setDayMode] = useState<'morning' | 'winddown' | null>(null);
   const [mealForm, setMealForm] = useState({ name: 'Breakfast', dish: '', kcal: '' });
   const [planForm, setPlanForm] = useState({ time: '7:00 AM', title: '', sub: '', area: 'Fitness' as PlanArea });
   const [statsForm, setStatsForm] = useState({ steps: '', calories: '', sleepHours: '', workoutMin: '' });
@@ -112,11 +119,33 @@ export default function Wellness() {
   const areaFor: Partial<Record<Tab, PlanArea>> = { Fitness: 'Fitness', Nutrition: 'Nutrition', Mindfulness: 'Mindfulness', Sleep: 'Sleep' };
   const isDone = (p: PlanItem) => p.doneOn === today;
   const planItems = plan.filter((p) => (!areaFor[tab] || p.area === areaFor[tab]) && matches(q, p.title, p.sub, p.area));
-  const togglePlan = (id: string) => wellnessPlanStore.set((ps) => ps.map((p) => (p.id === id ? { ...p, doneOn: p.doneOn === today ? undefined : today } : p)));
+  const togglePlan = (id: string) => {
+    const turningOn = plan.find((p) => p.id === id)?.doneOn !== today;
+    wellnessPlanStore.set((ps) => ps.map((p) => (p.id === id ? { ...p, doneOn: p.doneOn === today ? undefined : today } : p)));
+    if (turningOn) toast('🔥 Nice work. +5 XP');
+  };
   const done = plan.filter(isDone).length;
   const dates = weekDates(week === 'This Week' ? 0 : 1);
   const weekTotals = dates.map((d) => logMap.get(d));
   const hasWeekData = weekTotals.some((l) => l && (l.steps || l.calories || l.sleepHours));
+
+  // ----- AURA Wellness World: Today's Vibe, XP, Quests, Achievements, Records -----
+  // All derived from the stores above — nothing new is persisted for these except
+  // mindfulness session completions (wellnessEventsStore), which nothing else tracked.
+  const meditatedToday = events.some((e) => e.date === today);
+  const vibe = useMemo(() => computeVibe({ todayLog, mood, kcalEaten: kcal, planDoneToday: done, planTotal: plan.length }), [todayLog, mood, kcal, done, plan.length]);
+  const xp = useMemo(() => computeXP({ logs, habits, meals: allMeals, events, planDoneToday: done }), [logs, habits, allMeals, events, done]);
+  const habitsDoneToday = habits.filter((h) => h.done.includes(today)).length;
+  const quests = useMemo(() => computeQuests({ water, meditatedToday, planDoneToday: done, planTotal: plan.length, habitsDoneToday, habitsTotal: habits.length }), [water, meditatedToday, done, plan.length, habitsDoneToday, habits.length]);
+  const achievements = useMemo(() => computeAchievements({ logs, habits, meals: allMeals, events }), [logs, habits, allMeals, events]);
+  const records = useMemo(() => computeRecords({ logs, habits, events }), [logs, habits, events]);
+  const todaysWins = [
+    water >= TARGETS.water ? 'Hydration' : null,
+    meditatedToday ? 'Mindfulness' : null,
+    (todayLog?.steps ?? 0) >= TARGETS.steps || (todayLog?.workoutMin ?? 0) > 0 ? 'Movement' : null,
+    done > 0 ? 'Plan progress' : null,
+  ].filter((w): w is string => !!w);
+  const goToTab = (t: Tab) => setTab(t);
 
   const ai = domainAsk('wellness', () => JSON.stringify({
     today, plan: plan.map((p) => ({ time: p.time, title: p.title, area: p.area, doneToday: isDone(p) })), meals: meals.map((m) => ({ meal: m.name, dish: m.dish, kcal: m.kcal, eaten: m.eaten })),
@@ -129,7 +158,7 @@ export default function Wellness() {
     if (!mealForm.dish.trim()) return toast('Describe what you ate.');
     mealsStore.set((ms) => [...ms, { id: uid('ml'), name: mealForm.name, dish: mealForm.dish.trim(), kcal: Math.max(0, Number(mealForm.kcal) || 0), eaten: true, date: today }]);
     setDialog(null); setMealForm({ name: 'Breakfast', dish: '', kcal: '' });
-    toast('Meal logged.');
+    toast('🍎 Fuel logged. +5 XP');
   };
   const submitPlan = (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,7 +182,12 @@ export default function Wellness() {
     toast('Metric saved.');
   };
   const weekDays = weekDates(0);
-  const toggleHabit = (id: string, date: string) => habitsStore.set((hs) => hs.map((h) => (h.id === id ? { ...h, done: h.done.includes(date) ? h.done.filter((d) => d !== date) : [...h.done, date] } : h)));
+  const toggleHabit = (id: string, date: string) => {
+    const habit = habits.find((h) => h.id === id);
+    const turningOn = habit && !habit.done.includes(date);
+    habitsStore.set((hs) => hs.map((h) => (h.id === id ? { ...h, done: h.done.includes(date) ? h.done.filter((d) => d !== date) : [...h.done, date] } : h)));
+    if (turningOn && date === today) toast('🌱 Your garden grew! +10 XP');
+  };
 
   return (
     <div className="module">
@@ -165,7 +199,12 @@ export default function Wellness() {
             { icon: Bell, title: 'Routines', sub: 'Stay consistent', tone: 'teal' },
             { icon: BarChart3, title: 'Insights', sub: 'Track progress', tone: 'violet' },
             { icon: Flower2, title: 'Holistic Wellness', sub: 'Mind • Body • Life', tone: 'teal' },
-          ]} />
+          ]}>
+          <div className="row wrap" style={{ gap: 10, marginTop: 14 }}>
+            <NeonButton icon={Sun} onClick={() => setDayMode('morning')}>Morning check-in</NeonButton>
+            <NeonButton icon={Moon} onClick={() => setDayMode('winddown')}>Wind down</NeonButton>
+          </div>
+        </PageHero>
 
         <NeonTabs wrap tabs={visibleTabs as unknown as typeof TABS} value={tab} onChange={setTab} icons={tabIcons} />
 
@@ -173,6 +212,8 @@ export default function Wellness() {
           <PeriodTab />
         ) : tab === 'Habit Tracker' ? (
           <Hud corners title="Habit Tracker" sub="Tap a day to mark it done." action="Add habit" onAction={() => setDialog('habit')}>
+            <b style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>🌷 Your Wellness Garden</b>
+            <Garden habits={habits} weekDays={weekDays} />
             <div className="table-scroll">
               <table className="data-table">
                 <thead><tr><th>Habit</th>{DAY_LABELS.map((d) => <th key={d} style={{ textAlign: 'center' }}>{d}</th>)}<th style={{ textAlign: 'right' }}>This week</th></tr></thead>
@@ -186,6 +227,27 @@ export default function Wellness() {
             {!habits.length && <div className="empty">No habits yet. Add one to start tracking.</div>}
           </Hud>
         ) : (
+          <>
+            {tab === 'Overview' && (
+              <div className="stack" style={{ gap: 16, marginBottom: 16 }}>
+                <VibeCard vibe={vibe} mood={mood} />
+                {(mood === 'Stressed' || mood === 'Low') && (
+                  <button className="tile row" style={{ gap: 10, width: '100%', textAlign: 'left', ['--bd' as string]: `${toneHex.amber}88` }} onClick={() => setSession({ title: '3 min Stress Relief', minutes: 3 })}>
+                    <Sun size={22} style={{ color: toneHex.amber }} />
+                    <span style={{ flex: 1 }}>Feeling {mood.toLowerCase()}? A 3-minute Stress Relief session might help.</span>
+                  </button>
+                )}
+                <Hud corners><JourneyStrip bars={vibe.bars} /></Hud>
+                <div className="grid g2" style={{ gap: 16 }}>
+                  <XPCard xp={xp} />
+                  <QuestsCard quests={quests} onGoto={goToTab} />
+                </div>
+                <div className="grid g2" style={{ gap: 16 }}>
+                  <AchievementsCard achievements={achievements} />
+                  <RecordsCard records={records} />
+                </div>
+              </div>
+            )}
           <div className="grid wellness-grid">
             {(show('Fitness', 'Nutrition', 'Mindfulness', 'Sleep', 'Wellness Plan')) && (
               <Hud corners className="w-plan" title={<span className="section-title" style={{ fontSize: 20 }}>Today's Wellness Plan</span>} action={`${done}/${plan.length} done`}>
@@ -234,12 +296,15 @@ export default function Wellness() {
               </Hud>
             )}
           </div>
+          </>
         )}
-        <SyncStatus stores={[wellnessPlanStore, metricsStore, dayLogsStore, mealsStore, habitsStore, periodStore]} />
+        <SyncStatus stores={[wellnessPlanStore, metricsStore, dayLogsStore, mealsStore, habitsStore, periodStore, wellnessEventsStore]} />
       </div>
 
       <div className="rail">
-        <AICommandPanel title="Ask AURA Wellness" prompts={['Create a 7-day workout plan for me', 'Suggest a healthy meal plan', 'How can I reduce stress?', 'Generate a personalized sleep routine']}
+        <AICommandPanel title="Ask AURA Wellness" prompts={showPeriod
+          ? ['Create a gentle routine for this week', 'What should I add to my care kit?', 'Summarize my logged cycle patterns', 'How can I reduce stress?']
+          : ['Create a 7-day workout plan for me', 'Suggest a healthy meal plan', 'How can I reduce stress?', 'Generate a personalized sleep routine']}
           onAsk={ai} cta="Talk to AURA" ctaIcon={Mic} placeholder="Ask about workouts, meals, sleep…" />
         <Hud corners title={<span className="section-title" style={{ fontSize: 20 }}>Today's Meals</span>} action="Log meal" onAction={() => setDialog('meal')}>
           <div className="list">{meals.map((m) => <MealRow key={m.id} meal={m} onToggle={() => mealsStore.set((ms) => ms.map((x) => (x.id === m.id ? { ...x, eaten: !x.eaten } : x)))} onRemove={() => mealsStore.set((ms) => ms.filter((x) => x.id !== m.id))} />)}</div>
@@ -250,7 +315,7 @@ export default function Wellness() {
             {([
               [Utensils, 'Log Meal', 'red', () => setDialog('meal')],
               [Activity, 'Log Stats', 'violet', () => setDialog('stats')],
-              [GlassWater, `Log Water (${water}/${TARGETS.water})`, 'blue', () => { upsertLog({ water: Math.min(TARGETS.water, water + 1) }); toast(`Water logged: ${Math.min(TARGETS.water, water + 1)}/${TARGETS.water} glasses.`); }],
+              [GlassWater, `Log Water (${water}/${TARGETS.water})`, 'blue', () => { const next = Math.min(TARGETS.water, water + 1); upsertLog({ water: next }); toast(next >= TARGETS.water ? `💧 +1 — hydration goal reached! +10 XP` : `💧 +1 · ${next}/${TARGETS.water} glasses`); }],
               [Smile, mood ? `Mood: ${mood}` : 'Log Mood', 'magenta', () => setDialog('mood')],
             ] as const).map(([I, l, tone, fn]) => (
               <button key={l} className="tile stack" style={{ alignItems: 'center', gap: 6, ['--bd' as string]: `${toneHex[tone as Tone]}88` }} onClick={fn}>
@@ -261,7 +326,17 @@ export default function Wellness() {
         </Hud>
       </div>
 
-      {session && <Breathing {...session} onClose={() => setSession(null)} />}
+      {session && <Breathing {...session} onClose={() => setSession(null)} onFinish={(minutes) => wellnessEventsStore.set((es) => [...es, { id: uid('we'), type: 'mindfulness', date: today, minutes }])} />}
+      {dayMode === 'morning' && <MorningMode todayLog={todayLog} plan={plan} onClose={() => setDayMode(null)} />}
+      {dayMode === 'winddown' && (
+        <WindDownMode
+          mood={mood}
+          onSetMood={(m) => { upsertLog({ mood: m }); toast(`Mood logged: ${m}.`); }}
+          wins={todaysWins}
+          onClose={() => setDayMode(null)}
+          onBreathe={() => { setDayMode(null); setSession({ title: '15 min Wind-down', minutes: 15 }); }}
+        />
+      )}
       {dialog === 'meal' && (
         <FuturisticModal title="Log Meal" icon={Utensils} onClose={() => setDialog(null)}>
           <form className="stack" style={{ gap: 12 }} onSubmit={submitMeal}>
