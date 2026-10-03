@@ -47,6 +47,23 @@ export const aiClient = {
   searchShopping: (query: string, maxResults = 20) =>
     getAi<unknown[]>('/ai/shopping/search', { q: query, max_results: maxResults }),
 
+  shoppingPredictions: (params: { userId: string; asOf?: string }) =>
+    getAi<Record<string, unknown>>('/ai/shopping/predict', {
+      userId: params.userId,
+      ...(params.asOf ? { asOf: params.asOf } : {}),
+    }),
+
+  logShoppingEvents: (payload: { userId: string; events: Record<string, unknown>[] }) =>
+    callAi<{ stored: number; storedIn: string }>('/ai/shopping/events', payload),
+
+  shoppingModel: () => getAi<Record<string, unknown>>('/ai/shopping/model', {}),
+
+  cartAgentStore: (name: string) =>
+    getAi<{ key: string | null; name: string; startUrl: string; known: boolean }>('/ai/shopping/browse/store', { name }),
+
+  cartAgentStep: (payload: Record<string, unknown>) =>
+    callAi<Record<string, unknown>>('/ai/shopping/browse/step', payload),
+
   rankShopping: (products: unknown[]) =>
     callAi<{ data: unknown[]; modelStatus: string }>('/ai/shopping/suggestions', { products }),
 
@@ -68,6 +85,15 @@ export const aiClient = {
 
   rankTravel: (items: unknown[]) =>
     callAi<{ data: unknown[]; modelStatus: string }>('/ai/travel/suggestions', { items }),
+
+  travelPredictions: (params: { userId: string; asOf?: string }) =>
+    getAi<Record<string, unknown>>('/ai/travel/predict', {
+      userId: params.userId,
+      ...(params.asOf ? { asOf: params.asOf } : {}),
+    }),
+
+  logTravelEvent: (payload: Record<string, unknown> & { userId: string; action: string }) =>
+    callAi<{ stored: boolean; storedIn: string }>('/ai/travel/events', payload),
 
   searchResearch: (query: string, maxResults = 10) =>
     getAi<unknown[]>('/ai/research/search', { q: query, max_results: maxResults }),

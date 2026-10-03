@@ -31,7 +31,7 @@ Frontend  →  Node backend (:4000)  →  Supabase (auth/db/realtime)
 
 - **Node backend** is the only public boundary. It proxies AI calls to the Python service and enforces auth via Supabase JWTs + Row Level Security.
 - **Python AI service** is never exposed directly to the frontend — only reachable from the backend network.
-- **LLMService** (`ai-service/app/services/llm_service.py`) abstracts the model provider. Default: **NVIDIA NIM** (`mistralai/mistral-nemotron`); `GrokProvider` is available via `LLM_PROVIDER=grok`.
+- **LLMService** (`ai-service/app/services/llm_service.py`) abstracts the model provider. Default: **NVIDIA NIM** (`nvidia/nemotron-3-super-120b-a12b`); `GrokProvider` is available via `LLM_PROVIDER=grok`.
 - **VoiceService** exists on both sides:
   - `backend/src/services/voice.ts` — `POST /voice/speak`
   - `ai-service/app/services/voice_service.py` — `POST /ai/voice/speak`
@@ -108,8 +108,8 @@ This builds and runs `ai-service` (port 8000 — fine inside its own container, 
 Node (`backend/src`):
 ```
 /health /chat /voice /decisions
-/shopping (+ GET /shopping/search?q=...)
-/travel (+ GET /travel/flights, GET /travel/hotels)
+/shopping (+ GET /shopping/search?q=..., GET /shopping/predictions, POST /shopping/events, POST /shopping/agent/step)
+/travel (+ GET /travel/flights, GET /travel/hotels, GET /travel/predictions, POST /travel/events)
 /research (+ GET /research/search?q=...)
 /calendar (+ GET/POST /calendar/google/events, DELETE /calendar/google/events/:id)
 /tasks /finance /wellness /memory /automations /integrations /notifications /approvals /agents
@@ -118,7 +118,9 @@ Node (`backend/src`):
 Python (`ai-service/app`):
 ```
 /ai/health /ai/chat /ai/plan /ai/decide /ai/voice/speak
-/ai/shopping/search /ai/travel/flights /ai/travel/hotels /ai/research/search
+/ai/shopping/search /ai/research/search
+/ai/shopping/predict /ai/shopping/events /ai/shopping/ask /ai/shopping/model /ai/shopping/demo-users /ai/shopping/browse/step
+/ai/travel/flights /ai/travel/hotels /ai/travel/predict /ai/travel/events /ai/travel/ask /ai/travel/demo-users
 ```
 
 ## Data: nothing is mocked
@@ -132,15 +134,93 @@ The web app ships with **no sample data**. Every screen starts empty and fills f
 | Shopping prices | SerpAPI Google Shopping (India, ₹), cheapest first |
 | Flights and hotels | SerpAPI Google Flights / Hotels (India, ₹), cheapest first |
 | Research papers | arXiv API |
+| Next-trip forecast (Travel Agent) | LightGBM model in `ai-service/models/travel`, run on your own `travel_events` records. Synthetic **demo users** (`USER_000123`-style ids) exist only for testing; disable with `TRAVEL_DEMO_ENABLED=false` |
+| Next-purchase forecast (Shopping Agent) | LightGBM model in `ai-service/models/shopping`, run on your own `shopping_events` records and fine-tuned on them after each command. Demo users as above; disable with `SHOPPING_DEMO_ENABLED=false` |
 | Chat, decisions, plans, summaries, spoken replies | NVIDIA NIM (LLM) and Gemini TTS through the backend |
 | Weather (Home) | Open-Meteo, only after you allow location access |
 
 Behavior worth knowing:
-- **Nothing is executed on your behalf.** Approvals are recorded (`approvals` table) but no provider integration books, buys or sends. AURA never claims an external action succeeded.
+- **Nothing is executed on your behalf**, with one exception: a shopping command ("order milk from Zepto") makes the cart agent fill your cart on that store by itself. It stops at the cart; payment is not automated. Otherwise approvals are recorded (`approvals` table) but no provider integration books, buys or sends. AURA never claims an external action succeeded.
 - **Automations** "run" by asking AURA to prepare the actions and logging them for review.
 - **Pricing/billing** has no payment provider: choosing a paid plan saves your interest and charges nothing.
 - **Settings → Privacy** lets you export all your data (JSON) or delete it (`GET` / `DELETE /records`).
 - Shopping/travel locale defaults to India/INR (`DEFAULT_COUNTRY`, `DEFAULT_CURRENCY` in `ai-service/.env`).
+
+## Travel Agent
+
+When a chat message is about travel (flights, hotels, a trip, or any known city), the Travel Agent:
+
+1. **Forecasts the next trip** with the trained model (`ai-service/app/ml`): top-3 destinations, app, trip type and booking type, plus rough timing, spend and trip length. It uses the user's travel history (`app_records`, collection `travel_events`).
+2. **Understands the request** with the LLM: route, dates ("next Friday"), travellers, budget. Anything missing is filled from history: home city as the origin, the destination and dates they have been searching, and their usual trip length for the check-out date. If the LLM is down, simple keyword matching is used instead.
+3. **Searches live** Google Flights / Hotels (SerpAPI) and hands grounded notes to the final reply. It never books or pays.
+
+The model only knows a user once they have events. Log them from search/booking flows with `POST /travel/events` (backend) or `POST /ai/travel/events` (AI service). The model was trained on synthetic data (`synthetic_data/`), so retrain on real events once there are enough.
+
+### Testing it
+
+**Automated** (offline; the LLM and SerpAPI are mocked):
+```bash
+cd ai-service
+./.venv/Scripts/pip install -r requirements-dev.txt
+./.venv/Scripts/python -m pytest tests -q
+```
+`test_travel_features_parity.py` checks that serving features match training features exactly. It is skipped unless `synthetic_data/experiments/seed7_long` is on disk.
+
+**By hand**, with the AI service running (step 1 above). Open http://localhost:8001/docs to use the same endpoints from the browser:
+```bash
+# demo users (synthetic history), optionally by persona
+curl "localhost:8001/ai/travel/demo-users?persona=business_traveler"
+# forecast for a demo user now, or replayed at a past date alongside what they actually booked next
+curl "localhost:8001/ai/travel/predict?userId=USER_000030"
+curl "localhost:8001/ai/travel/predict?userId=USER_000030&asOf=2026-05-15T10:00"
+# just the Travel Agent: its notes, forecast, parsed request and live offers
+curl -X POST localhost:8001/ai/travel/ask -H "Content-Type: application/json" -d '{"userId":"USER_000030","message":"Find me a flight and hotel to Chandigarh next Friday"}'
+# the full AURA reply
+curl -X POST localhost:8001/ai/chat -H "Content-Type: application/json" -d '{"userId":"USER_000030","message":"Where should I go for my next trip?"}'
+# simulate the user researching a trip, then ask vaguely; the agent picks up Goa and the date
+curl -X POST localhost:8001/ai/travel/events -H "Content-Type: application/json" -d '{"userId":"USER_000030","action":"search","destination":"Goa","origin":"Pune","departure_date":"2026-10-16"}'
+curl -X POST localhost:8001/ai/chat -H "Content-Type: application/json" -d '{"userId":"USER_000030","message":"Book my trip"}'
+curl -X DELETE "localhost:8001/ai/travel/events/session?userId=USER_000030"   # forget test events
+```
+Through the backend (needs a signed-in user's token): `GET /travel/predictions` (outside production, add `?demoUser=USER_000030`) and `POST /travel/events`.
+
+## Shopping Agent
+
+Any shopping command, in chat or on the Shopping screen ("order 2 amul milk and eggs from Zepto", "get my usual groceries", "what am I running out of?", "compare wireless earbuds"), goes to the Shopping Agent (`ai-service/app/agents/shopping_agent.py`). It:
+
+1. **Understands the command** with the LLM (offline keyword parser if the LLM is down): order / suggest / search, which store, which items and how many.
+2. **Logs it** as shopping events (`app_records`, collection `shopping_events`) and **schedules a retrain** of the shopping model (below).
+3. **Predicts what's needed next** with the next-purchase model: each item's chance of being bought in the next 7 days, when it's due, which store this user buys it from, typical quantity and price. Gaps in the command are filled from this: "my usual" becomes the predicted basket, and if no store is named it uses the store they usually buy those items from.
+4. **For an order, returns a cart job** that the app starts immediately, with no confirmation step.
+
+### The next-purchase model
+
+`ai-service/app/ml/shopping_*`: a LightGBM classifier scoring P(user orders item X within 7 days) for every item the user has bought or looked at, plus popular items in their main categories. Features cover repurchase cycles (days since last order compared with their usual gap), recent searches, cart adds and wishlists, store and category habits, and catalog priors. One feature module (`shopping_features.py`) is used for training, retraining and live predictions, so they can't drift apart.
+
+- **Base model:** trained on 2,500 synthetic users (`synthetic_data/generate_shopping.py`, then `train_shopping.py`). Tested on users it never saw, over the last 4 months: AUC 0.943. For items bought every 10+ days, where timing matters, AUC is 0.75 against 0.65 for "most frequent" and 0.61 for "most overdue". Full metrics are in `models/shopping/shopping_lightgbm_v1.json`.
+- **Learning from use:** every event changes that user's features, so the next prediction already reflects it. Every command also schedules a fine-tune, debounced by 20 s and at most once per 2 min (`SHOPPING_RETRAIN_*` settings). The fine-tune adds trees to the base model, fit on all real users' history mixed with a synthetic sample, takes a few seconds, and hot-swaps the model in. It is saved to `app/data/shopping/` (not committed). `GET /ai/shopping/model` shows which model is serving.
+
+### The cart agent (phone app)
+
+`CartAssistantActivity` opens the store's real website in a WebView, logged in as the user (AURA never sees those credentials). After each page change, `agent.js` snapshots the visible buttons, links and inputs, with the product text around each, and posts it to `POST /shopping/agent/step`. The LLM picks one next action (search, click ADD, tap + for quantity, close a popup, open the cart), and `agent.js` performs it. This works on any store: known stores (Blinkit, Zepto, Instamart, BigBasket, JioMart, Amazon, Flipkart, Myntra, AJIO, Nykaa, Meesho, 1mg, PharmEasy, Croma, DMart) start from their site, and other stores start from a web search for their official site. If the LLM is unavailable, known stores fall back to a search-URL + "ADD" heuristic.
+
+**It stops at the cart.** Payment isn't automated yet. Three independent layers enforce this:
+- the server rewrites any pay, checkout, place-order or buy-now step into "done";
+- `safety.js` refuses those clicks in the page;
+- the WebView blocks payment-looking URLs and non-http schemes such as `upi://`.
+
+The agent never types into login, OTP, PIN or card fields. If a site needs login, an address or a captcha, it pauses, and the user taps **Continue** once that's done.
+
+On the web, the cart job uses the `browser-extension/` (Blinkit, Zepto and Instamart only); other stores need the phone app.
+
+```bash
+# forecast for a demo user (bachelor, mostly Swiggy Instamart)
+curl "localhost:8001/ai/shopping/predict?userId=USER_000001"
+# a command: parsed intent, forecast, and the cart job the phone would start
+curl -X POST localhost:8001/ai/shopping/ask -H "Content-Type: application/json" -d '{"userId":"USER_000001","message":"get my usual groceries"}'
+curl "localhost:8001/ai/shopping/model"             # base or fine-tuned, last retrain
+curl -X DELETE "localhost:8001/ai/shopping/events/session?userId=USER_000001"   # forget test events
+```
 
 ## Not built yet
 

@@ -4,4 +4,6 @@
     <string name="title_activity_main">AURA</string>
     <string name="package_name">com.aura.app</string>
     <string name="custom_url_scheme">com.aura.app</string>
+    <string name="accessibility_label">AURA shopping agent</string>
+    <string name="accessibility_description">Lets AURA add items to your cart in shopping apps (Blinkit, Zepto, Swiggy, Amazon…) when you ask it to. It reads and taps the shopping app only while a cart job you started is running, and it never pays: it stops at the cart.</string>
 </resources>

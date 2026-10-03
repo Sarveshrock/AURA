@@ -96,13 +96,19 @@ npm run cap:sync     # build the web app, copy it into android/, sync plugins
 npm run cap:android  # cap:sync + open the project in Android Studio
 ```
 
-**Quick Cart** (`services/extension.ts` + `native/cartAssistant.ts`) adds items from a shopping list to your cart on Blinkit/Zepto/Swiggy Instamart, then stops — it never completes payment. On web this needs the `browser-extension/` companion; on native it's built in, via a custom Capacitor plugin:
+**Quick Cart / cart agent** (`services/extension.ts` + `native/cartAssistant.ts`) fills your cart on a store by itself, then stops at the cart. Payment is not automated. It starts with no confirmation step whenever the Shopping Agent turns a command into an order (`aura.chat` starts it), or from the Quick Cart panel / "Fill … cart" forecast buttons. In the phone app it works on **any store**. On web it needs the `browser-extension/` companion and covers Blinkit, Zepto and Instamart. The native side is a custom Capacitor plugin:
 
-- `android/app/src/main/java/com/aura/app/AuraCartAssistantPlugin.java` — JS-facing plugin (`startQuickCart`, `quickCartProgress`/`quickCartDone` events)
-- `android/app/src/main/java/com/aura/app/CartAssistantActivity.java` — hosts a WebView on the real platform site (the user's own logged-in session; AURA never sees or stores those credentials) and injects the automation script after each page load
-- `android/app/src/main/java/com/aura/app/CartJobBridge.java` — tracks the active job (platform, items, cursor)
-- `android/app/src/main/assets/aura-cart/{safety,automate}.js` — same matching/safety logic as the browser extension (see `browser-extension/README.md` for why it's text-based, not hardcoded selectors)
+- `android/app/src/main/java/com/aura/app/AuraCartAssistantPlugin.java`: the JS-facing plugin (`startQuickCart({store, startUrl, items, apiBase, token})`, plus `quickCartProgress`, `quickCartNeedUser` and `quickCartDone` events).
+- `android/app/src/main/java/com/aura/app/CartAssistantActivity.java`: hosts a WebView on the real store site (the user's own logged-in session; AURA never sees or stores those credentials). It runs the agent loop: page snapshot, then `POST {apiBase}/shopping/agent/step`, then the action is performed. If the site needs login, an address or a captcha, it shows **Continue**.
+- `android/app/src/main/java/com/aura/app/CartJobBridge.java`: the active job (store, items with pending/added/failed status, recent action history).
+- `android/app/src/main/assets/aura-cart/agent.js`: snapshots visible controls with the product-card text around them, and performs click, type, scroll and navigate actions.
+- `android/app/src/main/assets/aura-cart/safety.js`: the click denylist.
 
-Two independent safety nets enforce "AURA fills the cart, you pay": in-page (`safety.js`'s click denylist) and native (`CartAssistantActivity` blocks navigation to any pay/checkout/UPI-looking URL). The only way to actually complete a purchase is the "Review & pay in the real app" button, which leaves this WebView and opens the platform's real app/site.
+Three independent safety nets enforce "AURA fills the cart, the user pays":
+- the server rewrites any pay, checkout or place-order step into "done";
+- `safety.js` refuses those clicks in the page;
+- `CartAssistantActivity` blocks payment-looking URLs and non-http schemes such as `upi://`.
+
+For a local backend on the emulator, set `VITE_API_URL=http://10.0.2.2:4000`. Cleartext HTTP is allowed only for that host and localhost (`res/xml/network_security_config.xml`).
 
 No iOS plugin yet — `AuraCartAssistantPlugin`/`CartAssistantActivity` are Android-only; an iOS build would need an equivalent `WKWebView`-based Swift plugin under `ios/App/App/` once `npx cap add ios` is run (requires Xcode/macOS).

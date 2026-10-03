@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { CheckCircle2, ArrowRight, ChevronRight, ChevronLeft, ShoppingCart, Mic, Store, ShieldCheck, ExternalLink, Search, BarChart3, CalendarDays, Zap } from 'lucide-react';
+import { CheckCircle2, ArrowRight, ChevronRight, ChevronLeft, ShoppingCart, Mic, Store, ShieldCheck, ExternalLink, Search, BarChart3, CalendarDays, Zap, Sparkles } from 'lucide-react';
 import { Hud, PageHero, NeonButton, Toggle, FuturisticModal, SyncStatus, toast, toneHex } from '../components/aura';
-import { AICommandPanel, confirmActions, domainAsk, type AIReply } from '../components/ai';
+import { AICommandPanel, confirmActions, type AIReply } from '../components/ai';
 import { ProductCard, CartLine, money } from '../components/shopping';
 import { categories, categoryQuery, type Product, type CartLine as CartItem, type ProductCategory, type Subscription } from '../data/products';
 import { cartStore, wishlistStore, subscriptionsStore, shoppingFeedbackStore } from '../state/stores';
 import { uid } from '../state/store';
-import { searchProducts, rankSuggestions } from '../services/shopping';
-import { extensionStore, quickCartStore, startQuickCart, parseShoppingList, PLATFORM_LABEL, type QuickCartPlatform } from '../services/extension';
+import { searchProducts, rankSuggestions, logShoppingEvents, getShoppingForecast, type ShoppingForecast } from '../services/shopping';
+import { extensionStore, quickCartStore, startQuickCart, parseShoppingList, cartAgentAnyStore, KNOWN_STORES, openAccessibilitySettings, retryPendingCart, syncAllStoreHistories } from '../services/extension';
+import { aura } from '../services/aura';
 
 const FREQUENCIES = [['Every month', 1], ['Every 2 months', 2], ['Every 3 months', 3]] as const;
 const nextOn = (months: number) => { const d = new Date(); d.setMonth(d.getMonth() + months); return d.toISOString().slice(0, 10); };
@@ -35,6 +36,7 @@ export default function Shopping() {
     setQuery(term);
     setState({ status: 'loading', error: '' });
     setAll(false);
+    logShoppingEvents([{ action: 'search', name: term }]);
     try {
       const found = await searchProducts(term);
       if (mine === seq.current) { setResults(found); setState({ status: 'idle', error: '' }); }
@@ -81,7 +83,10 @@ export default function Shopping() {
   const count = lines.reduce((s, l) => s + l.qty, 0);
   const cartQty = (id: string) => cart.find((c) => c.id === id)?.qty ?? 0;
   const setQty = (id: string, d: number) => cartStore.set((cs) => cs.map((c) => (c.id === id ? { ...c, qty: Math.max(0, c.qty + d) } : c)).filter((c) => c.qty > 0));
-  const addToCart = (p: Product) => cartStore.set((cs) => (cs.some((c) => c.id === p.id) ? cs.map((c) => (c.id === p.id ? { ...c, qty: c.qty + 1 } : c)) : [...cs, { ...p, qty: 1 } as CartItem]));
+  const addToCart = (p: Product) => {
+    logShoppingEvents([{ action: 'add_to_cart', name: p.name, app: p.provider, price: p.price, qty: 1 }]);
+    cartStore.set((cs) => (cs.some((c) => c.id === p.id) ? cs.map((c) => (c.id === p.id ? { ...c, qty: c.qty + 1 } : c)) : [...cs, { ...p, qty: 1 } as CartItem]));
+  };
   const byProvider = lines.reduce<Record<string, CartItem[]>>((acc, l) => ({ ...acc, [l.provider]: [...(acc[l.provider] ?? []), l] }), {});
 
   const known = [...cart, ...wish].filter((p, i, a) => a.findIndex((x) => x.id === p.id) === i);
@@ -98,20 +103,14 @@ export default function Shopping() {
     cheapestOffers: results.slice(0, 10).map((r) => ({ name: r.name, price: r.price, store: r.provider })),
     cart: lines.map((l) => ({ name: l.name, qty: l.qty, price: l.price, store: l.provider })),
   });
-  const chat = domainAsk('shopping', context);
   const ai = async (p: string): Promise<AIReply> => {
-    const orderMatch = p.match(/^(?:order|auto[- ]?order|get)\s+(.+?)\s+(?:from|on)\s+(blinkit|zepto|(?:swiggy\s+)?instamart)\s*$/i);
-    if (orderMatch) {
-      const platform = (/instamart/i.test(orderMatch[2]) ? 'instamart' : orderMatch[2].toLowerCase()) as QuickCartPlatform;
-      const items = parseShoppingList(orderMatch[1]);
-      if (!extensionStore.get().installed) {
-        return { text: `To fill your cart on ${PLATFORM_LABEL[platform]} automatically, install the AURA Cart Assistant browser extension first — see the "Quick Cart" panel on the right.` };
-      }
-      startQuickCart(platform, items);
-      return { text: `Opening ${PLATFORM_LABEL[platform]} and adding ${items.map((i) => (i.qty > 1 ? `${i.name} ×${i.qty}` : i.name)).join(', ')}. I'll stop right before payment — you review the cart and pay yourself.` };
+    // Price comparison stays on this page; every other command (order X from Y, get my usual, what do I
+    // need...) goes to the Shopping Agent, which learns from it and, for orders, fills the cart by itself.
+    const m = p.match(/^(?:find|search(?: for)?|compare|show me)\s+(.+)/i);
+    if (!m) {
+      const reply = await aura.chat(`[shopping] ${p}`, context());
+      return { text: reply.text };
     }
-    const m = p.match(/^(?:find|buy|search(?: for)?|compare|get me|show me)\s+(.+)/i);
-    if (!m) return chat(p);
     const term = m[1].replace(/\bunder\s*[\d,.]+\s*k?\b/i, '').trim() || m[1];
     const found = await run(term);
     if (!found.length) return { text: `I couldn't find live offers for “${term}”. Try different wording.` };
@@ -168,11 +167,14 @@ export default function Shopping() {
                 onLike={() => {
                   const on = wish.some((w) => w.id === p.id);
                   wishlistStore.set((w) => (on ? w.filter((x) => x.id !== p.id) : [...w, p]));
-                  if (!on) recordFeedback(p, true);
+                  if (!on) {
+                    recordFeedback(p, true);
+                    logShoppingEvents([{ action: 'wishlist', name: p.name, app: p.provider, price: p.price }]);
+                  }
                   toast(on ? 'Removed from wishlist.' : 'Saved to wishlist.');
                 }}
                 onAdd={() => { addToCart(p); toast('Added to Smart Cart.'); }}
-                onDismiss={() => { setDismissed((d) => new Set(d).add(p.id)); recordFeedback(p, false); toast('Got it — fewer like this.'); }} />
+                onDismiss={() => { setDismissed((d) => new Set(d).add(p.id)); recordFeedback(p, false); logShoppingEvents([{ action: 'not_interested', name: p.name, app: p.provider }]); toast('Got it — fewer like this.'); }} />
             ))}
           </div>
         </Hud>
@@ -219,10 +221,12 @@ export default function Shopping() {
 
       <div className="rail">
         <AICommandPanel title="Need something?" badge={null} icon={Store} header={<p className="t-sub" style={{ marginTop: -6, marginBottom: 10 }}>Just tell me…</p>}
-          prompts={['Find protein powder', 'Find a laptop under 60000', 'Compare wireless earbuds', 'Order milk and eggs from Blinkit']} promptStyle="bullets"
+          prompts={['Order milk and eggs from Zepto', 'Get my usual groceries', 'What am I running out of?', 'Compare wireless earbuds']} promptStyle="bullets"
           onAsk={ai} cta="Tell AURA to shop" ctaIcon={Mic} placeholder="What do you need?" />
 
         <QuickCartPanel />
+
+        <ForecastPanel />
 
         {byStore.length > 1 && (
           <Hud corners title={<span className="row" style={{ gap: 8 }}><BarChart3 size={18} className="c-cyan" /> Cheapest by store</span>}>
@@ -274,47 +278,119 @@ export default function Shopping() {
 }
 
 /**
- * Hands a shopping list to the AURA Cart Assistant browser extension, which
- * adds each item to your cart on the chosen platform and stops before
- * payment — see browser-extension/README.md. Degrades to an install prompt
- * if the extension isn't present.
+ * Hands a shopping list to the cart agent, which adds each item to your cart on the chosen store by
+ * itself and stops at the cart (payment isn't automated). In the phone app it works on any store; on
+ * the web it needs the browser extension and covers Blinkit/Zepto/Instamart.
  */
 function QuickCartPanel() {
   const { installed } = extensionStore.use();
   const progress = quickCartStore.use();
-  const [platform, setPlatform] = useState<QuickCartPlatform>('blinkit');
+  const [store, setStore] = useState('Blinkit');
   const [list, setList] = useState('');
 
   const submit = () => {
     const items = parseShoppingList(list);
     if (!items.length) { toast('Add at least one item, e.g. "milk x2, eggs, bread".'); return; }
-    startQuickCart(platform, items);
+    if (!store.trim()) { toast('Which store? e.g. Zepto, Amazon, BigBasket.'); return; }
+    void startQuickCart({ store: store.trim(), items });
   };
 
   return (
     <Hud corners title={<span className="row" style={{ gap: 8 }}><Zap size={18} className="c-cyan" /> Quick Cart</span>}>
       <p className="t-sub" style={{ fontSize: 12.5, marginTop: -6, marginBottom: 10 }}>
-        AURA adds these items to your cart on the store — you review and pay yourself. Never auto-pays.
+        AURA opens the store and adds these to your cart by itself, then stops at the cart. Payment isn't automated yet.
       </p>
-      {!installed && (
+      {!cartAgentAnyStore && !installed && (
         <div className="tag amber" style={{ padding: 8, whiteSpace: 'normal', fontSize: 12, marginBottom: 10 }}>
-          Extension not detected. Install the AURA Cart Assistant (see <code>browser-extension/README.md</code>) to enable this.
+          On the web this needs the AURA Cart Assistant extension (see <code>browser-extension/README.md</code>) and works on Blinkit, Zepto and Instamart. The phone app works on any store.
         </div>
       )}
       <textarea className="hud-textarea" rows={2} placeholder="milk x2, eggs, bread" value={list} onChange={(e) => setList(e.target.value)} style={{ marginBottom: 8 }} aria-label="Shopping list" />
       <div className="row wrap" style={{ gap: 8 }}>
-        <select className="select" value={platform} onChange={(e) => setPlatform(e.target.value as QuickCartPlatform)} aria-label="Platform" style={{ flex: 1, minWidth: 140 }}>
-          {(Object.keys(PLATFORM_LABEL) as QuickCartPlatform[]).map((p) => <option key={p} value={p}>{PLATFORM_LABEL[p]}</option>)}
-        </select>
+        <input className="select" list="aura-stores" value={store} onChange={(e) => setStore(e.target.value)} aria-label="Store" placeholder="Any store" style={{ flex: 1, minWidth: 140 }} />
+        <datalist id="aura-stores">{KNOWN_STORES.map((s) => <option key={s} value={s} />)}</datalist>
         <NeonButton variant="primary" onClick={submit} disabled={!list.trim() || progress.status === 'running'}>Fill my cart</NeonButton>
       </div>
-      {progress.status !== 'idle' && (
-        <div className="t-sub" style={{ fontSize: 12.5, marginTop: 10 }}>
-          {progress.status === 'running' && <span className="row" style={{ gap: 6 }}><span className="spinner" /> {progress.message}</span>}
-          {progress.status === 'done' && <span className="c-green">{progress.message}</span>}
-          {progress.status === 'error' && <span className="c-red">{progress.message}</span>}
+      {cartAgentAnyStore && (
+        <button className="link c-blue" style={{ background: 'none', border: 0, fontSize: 12.5, marginTop: 8, padding: 0 }}
+          disabled={!store.trim() || progress.status === 'running'}
+          onClick={() => void startQuickCart({ store: store.trim(), items: [], syncHistory: true })}>
+          Learn from my past {store.trim() || 'store'} orders
+        </button>
+      )}
+      {cartAgentAnyStore && (
+        <button className="link c-blue" style={{ background: 'none', border: 0, fontSize: 12.5, marginTop: 6, padding: 0, display: 'block' }}
+          disabled={progress.status === 'running'} onClick={() => void syncAllStoreHistories()}>
+          Learn from all my stores (reads past orders in every shopping app on this phone)
+        </button>
+      )}
+      <QuickCartStatus />
+    </Hud>
+  );
+}
+
+function QuickCartStatus() {
+  const progress = quickCartStore.use();
+  if (progress.status === 'idle') return null;
+  return (
+    <div className="t-sub" style={{ fontSize: 12.5, marginTop: 10 }}>
+      {progress.status === 'running' && <span className="row" style={{ gap: 6 }}><span className="spinner" /> {progress.message}</span>}
+      {progress.status === 'needs_you' && <span className="c-amber">{progress.message} (then tap Continue on the AURA bar)</span>}
+      {progress.status === 'needs_setup' && (
+        <div>
+          <span className="c-amber">{progress.message}</span>
+          <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
+            <NeonButton onClick={openAccessibilitySettings}>Open Accessibility settings</NeonButton>
+            <NeonButton variant="primary" onClick={() => retryPendingCart('auto')}>Fill in app</NeonButton>
+            <NeonButton onClick={() => retryPendingCart('web')}>Use website instead</NeonButton>
+          </div>
         </div>
       )}
+      {progress.status === 'done' && <span className="c-green">{progress.message}</span>}
+      {progress.status === 'error' && <span className="c-red">{progress.message}</span>}
+    </div>
+  );
+}
+
+/** What the next-purchase model expects the user to need this week, with one-tap cart filling per store. */
+function ForecastPanel() {
+  const [forecast, setForecast] = useState<ShoppingForecast | null>(null);
+  const [error, setError] = useState('');
+  const progress = quickCartStore.use();
+
+  useEffect(() => {
+    let live = true;
+    getShoppingForecast()
+      .then((f) => { if (live) { setForecast(f); setError(''); } })
+      .catch((e: unknown) => { if (live) setError(e instanceof Error ? e.message : 'Unavailable'); });
+    return () => { live = false; };
+  }, [progress.status === 'done']);
+
+  const items = forecast?.nextPurchases ?? [];
+  return (
+    <Hud corners title={<span className="row" style={{ gap: 8 }}><Sparkles size={18} className="c-cyan" /> You'll likely need</span>}>
+      {error && <div className="empty">{/bearer|401/i.test(error) ? 'Sign in to see predictions.' : error}</div>}
+      {!error && forecast?.status === 'cold_start' && <div className="empty">Order a few times and AURA will learn what you run out of.</div>}
+      {!error && !forecast && <div className="empty"><span className="spinner" /> Predicting…</div>}
+      <div className="list">
+        {items.slice(0, 6).map((i) => (
+          <div key={i.item} className="li" title={i.why}>
+            <div className="grow">
+              <div className="t-title" style={{ fontSize: 13, textTransform: 'capitalize' }}>{i.item}{i.usualQty > 1 ? ` ×${i.usualQty}` : ''}</div>
+              <div className="t-sub ellipsis" style={{ fontSize: 11.5 }}>
+                {i.dueInDays !== null ? (i.dueInDays < 1 ? 'due now' : `due in ~${Math.round(i.dueInDays)}d`) : i.why}{i.store ? ` · ${i.store}` : ''}
+              </div>
+            </div>
+            <b className={i.probability >= 0.7 ? 'c-green' : ''}>{Math.round(i.probability * 100)}%</b>
+          </div>
+        ))}
+      </div>
+      {(forecast?.suggestedBaskets ?? []).filter((b) => b.store).slice(0, 2).map((b) => (
+        <NeonButton key={b.store} block style={{ marginTop: 8 }} disabled={progress.status === 'running'}
+          onClick={() => void startQuickCart({ store: b.store!, items: b.items })}>
+          Fill {b.store} cart ({b.items.length}) · ~{money(b.estimatedAmountInr, 'INR')}
+        </NeonButton>
+      ))}
     </Hud>
   );
 }

@@ -14,6 +14,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     agentsConsulted: list[str] = Field(default_factory=list)
+    # structured per-agent output for the UI (e.g. travel forecast, flight/hotel offers)
+    agentData: dict[str, Any] = Field(default_factory=dict)
 
 
 class PlanRequest(BaseModel):
@@ -56,3 +58,4 @@ class AgentResult(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     options: list[str] = Field(default_factory=list)
     required_approval: bool = False
+    data: dict[str, Any] = Field(default_factory=dict)

@@ -1,6 +1,6 @@
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 
-const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:4000';
+export const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:4000';
 
 export class ApiError extends Error {
   status: number;
@@ -18,6 +18,13 @@ async function authHeaders(extra?: Record<string, string>): Promise<Record<strin
     if (data.session?.provider_token) headers['X-Google-Access-Token'] = data.session.provider_token;
   }
   return headers;
+}
+
+/** The signed-in user's session token, for native code that calls the backend itself (the cart agent). */
+export async function accessToken(): Promise<string | undefined> {
+  if (!isSupabaseConfigured) return undefined;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token;
 }
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
