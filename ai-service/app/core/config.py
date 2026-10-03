@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     port: int = 8000
 
-    llm_provider: str = "nvidia"  # "nvidia" | "grok"
+    llm_provider: str = "nvidia"  # "nvidia" | "grok" | "openrouter"
 
     grok_api_key: str = ""
     grok_base_url: str = "https://api.x.ai/v1"
@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     nvidia_api_key: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
     nvidia_model: str = "deepseek-ai/deepseek-v4.1-flash"
+
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Fast and reliable for short spoken replies (~3 s). Any OpenRouter model id works.
+    openrouter_model: str = "anthropic/claude-haiku-4.5"
 
     voice_provider: str = "gemini"  # "gemini" | "elevenlabs"
 

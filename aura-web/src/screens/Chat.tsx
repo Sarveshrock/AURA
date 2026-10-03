@@ -4,6 +4,7 @@ import { CalendarCheck, ShoppingCart, Plane, Wallet, ChevronRight, Mic, Send, Se
 import { AuraAvatar, Hud, Wave, ChatMessage, SyncStatus, AgentAvatar } from '../components/aura';
 import { aura } from '../services/aura';
 import { serverVoice } from '../services/voice';
+import { orderDestination } from '../services/orderFlow';
 import { buildUserContext } from '../state/context';
 import { agentById } from '../data/agents';
 import { useUser } from '../state/user';
@@ -44,6 +45,9 @@ export default function Chat() {
   const send = async (text: string) => {
     const msg = text.trim();
     if (!msg || busy) return;
+    // "order milk" etc. is handled by the shopping assistant (store choice, variants, cart fill), not the general chat model.
+    const dest = orderDestination(msg);
+    if (dest) { nav(dest, { state: { ask: msg } }); return; }
     chatStore.set((h) => [...h, { id: uid('cm'), role: 'user', text: msg, ts: new Date().toISOString() }]);
     setPending(msg);
     try {

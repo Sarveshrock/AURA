@@ -1,14 +1,15 @@
 import { Capacitor } from '@capacitor/core';
 import { createStore, uid } from '../state/store';
-import { AuraCartAssistant } from '../native/cartAssistant';
+import { AuraCartAssistant, type QuickCartNativeItem } from '../native/cartAssistant';
 
-export type QuickCartPlatform = 'blinkit' | 'zepto' | 'instamart';
-export interface QuickCartItem { name: string; qty: number }
+export type QuickCartPlatform = 'blinkit' | 'zepto' | 'instamart' | 'swiggy';
+export type QuickCartItem = QuickCartNativeItem;
 
 export const PLATFORM_LABEL: Record<QuickCartPlatform, string> = {
   blinkit: 'Blinkit',
   zepto: 'Zepto',
   instamart: 'Swiggy Instamart',
+  swiggy: 'Swiggy',
 };
 
 const isNative = Capacitor.isNativePlatform();
@@ -40,7 +41,7 @@ if (isNative) {
       status: 'running',
       index,
       total,
-      message: ok ? `Added ${index + 1}/${total} items…` : `Item ${index + 1}/${total} needs a manual add: ${note || 'not found'}`,
+      message: ok ? `Added ${note || 'item'} (${index + 1}/${total})` : `Item ${index + 1}/${total} not added: ${note || 'not found'}`,
     }));
   });
   void AuraCartAssistant.addListener('quickCartDone', () => {
@@ -98,6 +99,10 @@ export function startQuickCart(platform: QuickCartPlatform, items: QuickCartItem
     return;
   }
 
+  if (platform === 'swiggy') {
+    quickCartStore.set({ status: 'error', platform, index: 0, total: items.length, message: 'Swiggy food ordering works in the AURA Android app.' });
+    return;
+  }
   if (!extensionStore.get().installed) {
     quickCartStore.set({ status: 'error', platform, index: 0, total: items.length, message: 'Install the AURA Cart Assistant browser extension first (see browser-extension/README.md).' });
     return;

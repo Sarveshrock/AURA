@@ -6,8 +6,7 @@ import {
 } from 'lucide-react';
 import { AuraAvatar, Hud, Wave, StatusBadge, VoiceVisualizer, NeonButton, type AuraState } from '../components/aura';
 import { browserVoice, serverVoice } from '../services/voice';
-import { aura } from '../services/aura';
-import { buildUserContext } from '../state/context';
+import { handleUtterance } from '../services/companion';
 import { useUser } from '../state/user';
 
 const commands = [
@@ -44,11 +43,13 @@ export default function Voice() {
     setState('thinking');
     setError('');
     try {
-      const reply = await aura.chat(text, buildUserContext());
-      setLines((l) => [...l, { who: 'AURA', text: reply.text, t: stamp() }]);
+      // Same fast brain as the companion orb: simple things are understood on the phone, the rest takes one short model call.
+      const reply = await handleUtterance(text, (path, opts) => nav(path, opts));
+      if (!reply) { setState('idle'); return; }
+      setLines((l) => [...l, { who: 'AURA', text: reply, t: stamp() }]);
       if (mutedRef.current) { setState('idle'); return; }
       setState('speaking');
-      await serverVoice.speak(reply.text);
+      await serverVoice.speak(reply);
       setState('idle');
     } catch (e) {
       setState('idle');

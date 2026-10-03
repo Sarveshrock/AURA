@@ -25,7 +25,7 @@ async function auraProcessItem(item, index, total, widget) {
   widget.update(`Adding ${index + 1}/${total}: ${item.name}…`);
 
   const result = await auraAddItemToCart(item);
-  widget.update(result.ok ? `Added: ${item.name}` : `Couldn't add: ${item.name} — add it yourself once you're in your real cart`);
+  widget.update(result.ok ? `Added: ${result.note}` : `Couldn't add ${item.name}: ${result.note}`);
 
   const next = JSON.parse(window.AuraNative.handle(JSON.stringify({ type: "ITEM_DONE", ok: result.ok, note: result.note })));
 
@@ -47,18 +47,35 @@ function buildSearchUrl(query) {
       return `https://www.zeptonow.com/search?query=${q}`;
     case "instamart":
       return `https://www.swiggy.com/instamart/search?custom_back=true&query=${q}`;
+    case "swiggy":
+      return `https://www.swiggy.com/search?query=${q}`;
     default:
       return location.href;
   }
 }
 
+var AURA_FOOD_PLATFORMS = ["swiggy", "zomato"];
+
 async function auraAddItemToCart(item) {
   await auraSleep(1500); // let the SPA render search results after navigation
 
-  const card = await auraWaitFor(() => auraFindMatchingCard(item.name), { timeout: 9000, interval: 300 });
-  if (!card) return { ok: false, note: "No matching product found on the results page" };
+  // Food search opens on "Restaurants"; the dish we want is under "Dishes".
+  if (AURA_FOOD_PLATFORMS.includes(window.__AURA_PLATFORM__)) await auraOpenDishesTab();
 
-  const addControl = auraFindAddControl(card);
+  let found = await auraWaitFor(() => { const r = auraFindBestCard(item); return r.card ? r : null; }, { timeout: 9000, interval: 300 });
+  if (!found) {
+    const r = auraFindBestCard(item);
+    if (r.reason === "no-products") {
+      return { ok: false, note: "No orderable products on the page — the store may be asking you to pick a location or log in first" };
+    }
+    return { ok: false, note: `Saw ${r.seen} products but none was ${item.name} (${r.reason}) — I added nothing; pick it yourself on this page` };
+  }
+  // Results load in stages: give the page a moment, then choose the best of everything that showed up.
+  await auraSleep(1200);
+  const best = auraFindBestCard(item);
+  if (best.card) found = best;
+
+  const addControl = auraFindAddControl(found.card);
   if (!addControl) return { ok: false, note: "Found the product but no Add control near it" };
 
   if (!auraSafeClick(addControl)) {
@@ -69,27 +86,25 @@ async function auraAddItemToCart(item) {
   if (qty > 1) {
     await auraSleep(600);
     for (let i = 1; i < qty; i++) {
-      const inc = auraFindIncrementControl(card);
+      const inc = auraFindIncrementControl(found.card);
       if (!inc) break;
       auraSafeClick(inc);
       await auraSleep(400);
     }
   }
 
-  return { ok: true, note: `Requested qty ${qty}` };
+  return { ok: true, note: `${found.title} ×${qty}` };
 }
 
-function auraFindMatchingCard(productName) {
-  const addButtons = auraFindAllAddButtons();
-  for (const btn of addButtons) {
-    let node = btn;
-    for (let depth = 0; depth < 6 && node; depth++) {
-      const text = node.innerText || node.textContent || "";
-      if (text.length > 0 && text.length < 500 && auraFuzzyMatch(text, productName)) return node;
-      node = node.parentElement;
-    }
-  }
-  return null;
+/** On Swiggy/Zomato search, switches from the Restaurants list to the Dishes list. */
+async function auraOpenDishesTab() {
+  const find = () =>
+    Array.from(document.querySelectorAll('button, [role="button"], [role="tab"], a, div, span')).find((el) => {
+      if (el.children.length > 1) return false;
+      return /^dishes$/i.test((el.innerText || el.textContent || "").trim());
+    });
+  const tab = await auraWaitFor(find, { timeout: 6000, interval: 300 });
+  if (tab && auraSafeClick(tab)) await auraSleep(1800);
 }
 
 function auraFindAllAddButtons() {

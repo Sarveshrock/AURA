@@ -1,6 +1,10 @@
 import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 
-export interface QuickCartNativeItem { name: string; qty: number }
+/** `name` is the search text; the rest tell the on-page matcher which product to pick (see assets/aura-cart/match.js). */
+export interface QuickCartNativeItem {
+  name: string; qty: number;
+  head?: string[]; must?: string[][]; avoid?: string[]; exclude?: string[]; size?: string; brand?: string;
+}
 
 export interface QuickCartProgressEvent { index: number; total: number; ok: boolean; note: string }
 

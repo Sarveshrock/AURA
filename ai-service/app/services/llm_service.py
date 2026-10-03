@@ -1,5 +1,5 @@
 """LLMService abstraction. All model calls go through this module so the
-provider (NVIDIA NIM by default, Grok as an alternative) can be swapped
+provider (NVIDIA NIM by default; Grok and OpenRouter as alternatives) can be swapped
 without touching callers."""
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ class LLMServiceError(Exception):
 
 
 class LLMProvider:
-    async def chat(self, messages: list[dict[str, str]], *, json_mode: bool = False) -> str:
+    async def chat(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int | None = None) -> str:
         raise NotImplementedError
 
 
@@ -45,7 +45,7 @@ class _OpenAICompatibleProvider(LLMProvider):
     label: str
     supports_json_mode: bool = True
 
-    async def chat(self, messages: list[dict[str, str]], *, json_mode: bool = False) -> str:
+    async def chat(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int | None = None) -> str:
         if not self.api_key:
             raise LLMServiceError(f"{self.label} API key is not configured.")
 
@@ -54,6 +54,8 @@ class _OpenAICompatibleProvider(LLMProvider):
             "messages": messages,
             "temperature": 0.4,
         }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
         if json_mode and self.supports_json_mode:
             payload["response_format"] = {"type": "json_object"}
 
@@ -115,9 +117,22 @@ class NvidiaProvider(_OpenAICompatibleProvider):
         self.model = settings.nvidia_model
 
 
+class OpenRouterProvider(_OpenAICompatibleProvider):
+    """OpenRouter (openrouter.ai) — one OpenAI-compatible endpoint in front of many hosted models."""
+
+    label = "OpenRouter"
+    supports_json_mode = False
+
+    def __init__(self) -> None:
+        self.api_key = settings.openrouter_api_key
+        self.base_url = settings.openrouter_base_url
+        self.model = settings.openrouter_model
+
+
 _PROVIDERS: dict[str, type[_OpenAICompatibleProvider]] = {
     "nvidia": NvidiaProvider,
     "grok": GrokProvider,
+    "openrouter": OpenRouterProvider,
 }
 
 
@@ -130,15 +145,15 @@ class LLMService:
     def __init__(self, provider: LLMProvider):
         self._provider = provider
 
-    async def chat(self, messages: list[dict[str, str]]) -> str:
-        return await self._provider.chat(messages)
+    async def chat(self, messages: list[dict[str, str]], *, max_tokens: int | None = None) -> str:
+        return await self._provider.chat(messages, max_tokens=max_tokens)
 
-    async def chat_json(self, messages: list[dict[str, str]]) -> dict[str, Any]:
+    async def chat_json(self, messages: list[dict[str, str]], *, max_tokens: int | None = None) -> dict[str, Any]:
         json_instruction = {
             "role": "system",
             "content": "Respond with ONLY a single valid JSON object. No markdown, no commentary.",
         }
-        raw = await self._provider.chat([json_instruction, *messages], json_mode=True)
+        raw = await self._provider.chat([json_instruction, *messages], json_mode=True, max_tokens=max_tokens)
         candidate = _extract_json_object(raw)
         try:
             return json.loads(candidate)

@@ -50,6 +50,7 @@ public class CartAssistantActivity extends Activity {
     private static final String HOME_URL_BLINKIT = "https://blinkit.com/";
     private static final String HOME_URL_ZEPTO = "https://www.zeptonow.com/";
     private static final String HOME_URL_INSTAMART = "https://www.swiggy.com/instamart";
+    private static final String HOME_URL_SWIGGY = "https://www.swiggy.com/";
 
     private WebView webView;
     private Button reviewAndPayButton;
@@ -138,6 +139,7 @@ public class CartAssistantActivity extends Activity {
 
         view.evaluateJavascript(bootstrap, null);
         view.evaluateJavascript(readAsset("aura-cart/safety.js"), null);
+        view.evaluateJavascript(readAsset("aura-cart/match.js"), null);
         view.evaluateJavascript(readAsset("aura-cart/automate.js"), null);
     }
 
@@ -158,12 +160,14 @@ public class CartAssistantActivity extends Activity {
         if ("blinkit".equals(platform)) return "https://blinkit.com/s/?q=" + q;
         if ("zepto".equals(platform)) return "https://www.zeptonow.com/search?query=" + q;
         if ("instamart".equals(platform)) return "https://www.swiggy.com/instamart/search?custom_back=true&query=" + q;
+        if ("swiggy".equals(platform)) return "https://www.swiggy.com/search?query=" + q;
         return "about:blank";
     }
 
     private void openRealAppToPay() {
         String home = "blinkit".equals(platform) ? HOME_URL_BLINKIT
                 : "zepto".equals(platform) ? HOME_URL_ZEPTO
+                : "swiggy".equals(platform) ? HOME_URL_SWIGGY
                 : HOME_URL_INSTAMART;
         startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(home)));
         finish();

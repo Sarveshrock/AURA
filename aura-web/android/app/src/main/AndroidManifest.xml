@@ -29,6 +29,14 @@
             android:label="AURA Cart Assistant"
             android:exported="false" />
 
+        <receiver android:name=".DoseAlarmReceiver" android:exported="false" />
+        <receiver android:name=".DoseActionReceiver" android:exported="false" />
+        <receiver android:name=".MedicineBootReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -40,7 +48,26 @@
         </provider>
     </application>
 
+    <!-- Lets the app see whether a pharmacy app is installed so it can open it directly. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <package android:name="com.aranoah.healthkart.plus" />
+        <package android:name="com.phonegenie.pharmeasy" />
+        <package android:name="com.apollo.patientapp" />
+        <package android:name="com.NetmedsMarketplace.Netmeds" />
+    </queries>
+
     <!-- Permissions -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 </manifest>

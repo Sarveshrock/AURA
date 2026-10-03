@@ -8,8 +8,8 @@ import { toast } from '../ui';
 export interface AIAction {
   label: string;
   variant?: 'primary' | 'default' | 'danger';
-  /** Runs the change. Return a message to show as AURA's follow-up. */
-  run?: () => string | void;
+  /** Runs the change. Return a message to show as AURA's follow-up, or a full reply (with its own buttons) to ask the next question. */
+  run?: () => string | AIReply | void;
 }
 export interface AIReply {
   text: string;
@@ -126,12 +126,14 @@ export default function AICommandPanel({
 
   const onAction = (m: Msg, a: AIAction) => {
     const result = a.run?.();
+    const reply = typeof result === 'object' ? result : undefined;
+    const text = reply ? reply.text : typeof result === 'string' ? result : undefined;
     setMsgs((ms) => [
       ...ms.map((x) => (x.id === m.id ? { ...x, resolved: true } : x)),
       { id: idRef.current++, role: 'user', text: a.label },
-      ...(result ? [{ id: idRef.current++, role: 'aura' as const, text: result, streaming: true }] : []),
+      ...(text ? [{ id: idRef.current++, role: 'aura' as const, text, reply, streaming: true }] : []),
     ]);
-    if (result && a.variant === 'primary') toast(result);
+    if (typeof result === 'string' && a.variant === 'primary') toast(result);
   };
 
   const voice = () => {

@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { CheckCircle2, ArrowRight, ChevronRight, ChevronLeft, ShoppingCart, Mic, Store, ShieldCheck, ExternalLink, Search, BarChart3, CalendarDays, Zap } from 'lucide-react';
 import { Hud, PageHero, NeonButton, Toggle, FuturisticModal, SyncStatus, toast, toneHex } from '../components/aura';
 import { AICommandPanel, confirmActions, domainAsk, type AIReply } from '../components/ai';
 import { ProductCard, CartLine, money } from '../components/shopping';
 import { categories, categoryQuery, type Product, type CartLine as CartItem, type ProductCategory, type Subscription } from '../data/products';
-import { cartStore, wishlistStore, subscriptionsStore, shoppingFeedbackStore } from '../state/stores';
+import { cartStore, wishlistStore, subscriptionsStore, shoppingFeedbackStore, orderPrefsStore } from '../state/stores';
 import { uid } from '../state/store';
 import { searchProducts, rankSuggestions } from '../services/shopping';
+import { startOrder } from '../services/orderFlow';
+import { parseOrderRequest, toLine } from '../services/orderIntent';
 import { extensionStore, quickCartStore, startQuickCart, parseShoppingList, PLATFORM_LABEL, type QuickCartPlatform } from '../services/extension';
 
 const FREQUENCIES = [['Every month', 1], ['Every 2 months', 2], ['Every 3 months', 3]] as const;
@@ -16,6 +19,11 @@ export default function Shopping() {
   const cart = cartStore.use();
   const wish = wishlistStore.use();
   const subs = subscriptionsStore.use();
+  orderPrefsStore.use(); // loads the remembered store/variant choices used by "order milk"
+  const nav = useNavigate();
+  const loc = useLocation();
+  // Chat / Voice hand an order request here so it runs in the shopping assistant.
+  const [trigger] = useState(() => { const ask = (loc.state as { ask?: string } | null)?.ask; return ask ? { prompt: ask, id: 1 } : null; });
   const [query, setQuery] = useState('');
   const [draft, setDraft] = useState('');
   const [cat, setCat] = useState<'All' | ProductCategory>('All');
@@ -100,16 +108,8 @@ export default function Shopping() {
   });
   const chat = domainAsk('shopping', context);
   const ai = async (p: string): Promise<AIReply> => {
-    const orderMatch = p.match(/^(?:order|auto[- ]?order|get)\s+(.+?)\s+(?:from|on)\s+(blinkit|zepto|(?:swiggy\s+)?instamart)\s*$/i);
-    if (orderMatch) {
-      const platform = (/instamart/i.test(orderMatch[2]) ? 'instamart' : orderMatch[2].toLowerCase()) as QuickCartPlatform;
-      const items = parseShoppingList(orderMatch[1]);
-      if (!extensionStore.get().installed) {
-        return { text: `To fill your cart on ${PLATFORM_LABEL[platform]} automatically, install the AURA Cart Assistant browser extension first — see the "Quick Cart" panel on the right.` };
-      }
-      startQuickCart(platform, items);
-      return { text: `Opening ${PLATFORM_LABEL[platform]} and adding ${items.map((i) => (i.qty > 1 ? `${i.name} ×${i.qty}` : i.name)).join(', ')}. I'll stop right before payment — you review the cart and pay yourself.` };
-    }
+    const order = startOrder(p, (path) => nav(path));
+    if (order) return order;
     const m = p.match(/^(?:find|buy|search(?: for)?|compare|get me|show me)\s+(.+)/i);
     if (!m) return chat(p);
     const term = m[1].replace(/\bunder\s*[\d,.]+\s*k?\b/i, '').trim() || m[1];
@@ -219,8 +219,8 @@ export default function Shopping() {
 
       <div className="rail">
         <AICommandPanel title="Need something?" badge={null} icon={Store} header={<p className="t-sub" style={{ marginTop: -6, marginBottom: 10 }}>Just tell me…</p>}
-          prompts={['Find protein powder', 'Find a laptop under 60000', 'Compare wireless earbuds', 'Order milk and eggs from Blinkit']} promptStyle="bullets"
-          onAsk={ai} cta="Tell AURA to shop" ctaIcon={Mic} placeholder="What do you need?" />
+          prompts={['Find protein powder', 'Find a laptop under 60000', 'Compare wireless earbuds', 'Order milk', 'Order momos']} promptStyle="bullets"
+          onAsk={ai} trigger={trigger} cta="Tell AURA to shop" ctaIcon={Mic} placeholder="What do you need?" />
 
         <QuickCartPanel />
 
@@ -286,7 +286,9 @@ function QuickCartPanel() {
   const [list, setList] = useState('');
 
   const submit = () => {
-    const items = parseShoppingList(list);
+    // Same understanding as the chat: "milk" skips chocolate milk and powder, "eggs" picks an egg pack, and so on.
+    const parsed = parseOrderRequest(`order ${list}`);
+    const items = parsed ? parsed.items.map(toLine) : parseShoppingList(list);
     if (!items.length) { toast('Add at least one item, e.g. "milk x2, eggs, bread".'); return; }
     startQuickCart(platform, items);
   };

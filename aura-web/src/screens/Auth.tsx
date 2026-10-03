@@ -1,19 +1,24 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { motion, useReducedMotion } from 'framer-motion';
 import {
   Brain, Network, Crosshair, ShieldCheck, SlidersHorizontal, TrendingUp, User, Lock, Eye, EyeOff, Mail, Phone, Zap, Check,
   Briefcase, HeartPulse, BarChart3, Plane, BookOpen, Leaf, ShoppingCart, Users, MoreHorizontal, Clock, Sun,
   Laptop, Moon, Building2, Dumbbell, Utensils, Settings2, ArrowLeft, ArrowRight, Target, Globe, Github, Apple,
 } from 'lucide-react';
 import { AuraAvatar, AuraLogo, AppLogo, HudInput, IconBox, NeonButton, Wave } from '../components/aura';
-import { signInWithGoogle, signInWithEmail, signUpWithEmail, AuthNotConfiguredError } from '../services/auth';
+import { staggerContainer, staggerItem, EASE } from '../components/motion';
+import { signInWithGoogle, signInWithEmail, signUpWithEmail, getSession, AuthNotConfiguredError } from '../services/auth';
 import { profileStore } from '../state/stores';
 
 function Stage({ children }: { children: ReactNode }) {
+  const reduceMotion = useReducedMotion();
   return (
     <div className="auth-wrap">
       <div className="space-bg" />
-      {children}
+      <motion.div initial={reduceMotion ? false : { opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: EASE }}>
+        {children}
+      </motion.div>
     </div>
   );
 }
@@ -82,8 +87,23 @@ function FeatTile({ icon: Icon, label }: { icon: typeof Brain; label: string }) 
   );
 }
 
+const BRAND = ['A', 'U', 'R', 'A'];
+const letterIn = { hidden: { opacity: 0, y: 24, filter: 'blur(6px)' }, show: { opacity: 1, y: 0, filter: 'blur(0px)' } };
+
+/** The saved session survives app restarts, so a signed-in user skips the splash/login screens. */
+function useSkipIfSignedIn() {
+  const nav = useNavigate();
+  useEffect(() => {
+    let live = true;
+    void getSession().then((s) => { if (live && s) nav('/dashboard', { replace: true }); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [nav]);
+}
+
 export function Splash() {
   const nav = useNavigate();
+  useSkipIfSignedIn();
+  const reduceMotion = useReducedMotion();
   const [booted, setBooted] = useState(0);
   useEffect(() => {
     if (booted >= bootLines.length) return;
@@ -96,49 +116,67 @@ export function Splash() {
     <Stage>
       <div className="landing">
         <div className="landing-top">
-          <div className="hud corners landing-side" aria-live="polite">
+          <motion.div className="hud corners landing-side" aria-live="polite" initial={reduceMotion ? false : { opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.5, ease: EASE }}>
             <div className="hud-label" style={{ marginBottom: 10 }}>Initializing AURA Core…</div>
             {bootLines.map((l, i) => (
-              <div key={l} className="row between mono" style={{ padding: '3px 0', fontSize: 11.5, textTransform: 'uppercase', color: i < booted ? '#fff' : 'var(--aura-muted)' }}>
+              <motion.div
+                key={l} className="row between mono" style={{ padding: '3px 0', fontSize: 11.5, textTransform: 'uppercase', color: i < booted ? '#fff' : 'var(--aura-muted)' }}
+                animate={i === booted - 1 && !reduceMotion ? { x: [0, 3, 0] } : undefined} transition={{ duration: 0.3 }}
+              >
                 {l}
                 {i < booted ? <Check size={14} className="c-cyan" /> : <span className="spinner" style={{ width: 11, height: 11 }} />}
-              </div>
+              </motion.div>
             ))}
-          </div>
+            <div style={{ height: 3, borderRadius: 2, background: 'rgba(25,230,255,0.12)', marginTop: 10, overflow: 'hidden' }}>
+              <motion.div style={{ height: '100%', background: 'var(--aura-cyan)', boxShadow: '0 0 8px var(--aura-cyan)' }} animate={{ width: `${(booted / bootLines.length) * 100}%` }} transition={{ duration: 0.35, ease: EASE }} />
+            </div>
+          </motion.div>
           <div style={{ textAlign: 'center', flex: 1 }}>
-            <h1 className="brand-name" style={{ fontSize: 'clamp(64px, 10vw, 118px)', letterSpacing: 12 }}>AURA</h1>
-            <div style={{ letterSpacing: 9, fontSize: 'clamp(15px, 1.8vw, 22px)', marginTop: 12 }}>YOUR AI CO-PILOT</div>
-            <div className="t-sub" style={{ letterSpacing: 5, marginTop: 16, fontSize: 12.5 }}>THINK • PLAN • DECIDE • ACT • WITH YOU</div>
-            <div style={{ width: 44, height: 2, margin: '16px auto 0', background: 'var(--aura-cyan)', boxShadow: '0 0 10px var(--aura-cyan)' }} />
+            <motion.h1
+              className="brand-name" style={{ fontSize: 'clamp(64px, 10vw, 118px)', letterSpacing: 12, display: 'inline-flex' }}
+              initial={reduceMotion ? false : 'hidden'} animate="show" variants={{ show: { transition: { staggerChildren: 0.12 } } }}
+            >
+              {BRAND.map((ch, i) => <motion.span key={i} variants={letterIn} transition={{ duration: 0.5, ease: EASE }}>{ch}</motion.span>)}
+            </motion.h1>
+            <motion.div style={{ letterSpacing: 9, fontSize: 'clamp(15px, 1.8vw, 22px)', marginTop: 12 }} initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.55, duration: 0.5 }}>YOUR AI CO-PILOT</motion.div>
+            <motion.div className="t-sub" style={{ letterSpacing: 5, marginTop: 16, fontSize: 12.5 }} initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.7, duration: 0.5 }}>THINK • PLAN • DECIDE • ACT • WITH YOU</motion.div>
+            <motion.div style={{ width: 44, height: 2, margin: '16px auto 0', background: 'var(--aura-cyan)', boxShadow: '0 0 10px var(--aura-cyan)' }} initial={reduceMotion ? false : { scaleX: 0 }} animate={{ scaleX: 1 }} transition={{ delay: 0.85, duration: 0.4 }} />
           </div>
-          <div className="hud corners landing-side">
+          <motion.div className="hud corners landing-side" initial={reduceMotion ? false : { opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.5, ease: EASE }}>
             <div className="hud-label" style={{ marginBottom: 8 }}>User-centric AI ecosystem</div>
             <div style={{ width: 70, height: 70, borderRadius: '50%', margin: '4px auto 8px', background: 'radial-gradient(circle at 35% 35%, #3fa9ff, #07306e 60%, #020a1a)', boxShadow: '0 0 20px rgba(0,175,255,0.6)', display: 'grid', placeItems: 'center' }}><Globe size={40} strokeWidth={1} color="#9fe6ff" /></div>
             {['Understand', 'Reason', 'Coordinate', 'Decide', 'Assist', 'Evolve'].map((x) => (
               <div key={x} className="mono" style={{ padding: '2px 0', color: 'var(--aura-text-2)', fontSize: 11, textTransform: 'uppercase' }}>▫ {x}</div>
             ))}
-          </div>
+          </motion.div>
         </div>
 
-        <div className="landing-core">
-          <div className="landing-feats">{featLeft.map((f) => <FeatTile key={f.label} {...f} />)}</div>
-          <div className="landing-entity">
+        <motion.div className="landing-core" initial={false} animate={ready ? 'show' : 'hidden'} variants={staggerContainer}>
+          <motion.div className="landing-feats" variants={staggerItem}>{featLeft.map((f) => <FeatTile key={f.label} {...f} />)}</motion.div>
+          <motion.div
+            className="landing-entity"
+            initial={reduceMotion ? false : { opacity: 0, scale: 0.9 }}
+            animate={ready ? { opacity: 1, scale: 1, filter: ['drop-shadow(0 0 0px rgba(0,217,255,0))', 'drop-shadow(0 0 28px rgba(0,217,255,0.55))', 'drop-shadow(0 0 14px rgba(0,217,255,0.3))'] } : { opacity: 0.35, scale: 0.96 }}
+            transition={{ duration: 0.8, ease: EASE }}
+          >
             <AuraAvatar art="core" size={420} height={520} square state={ready ? 'idle' : 'thinking'} rings={false} />
             <div className="landing-beam" aria-hidden />
             <div className="landing-pad" aria-hidden />
-          </div>
-          <div className="landing-feats">{featRight.map((f) => <FeatTile key={f.label} {...f} />)}</div>
-        </div>
+          </motion.div>
+          <motion.div className="landing-feats" variants={staggerItem}>{featRight.map((f) => <FeatTile key={f.label} {...f} />)}</motion.div>
+        </motion.div>
 
         <div style={{ textAlign: 'center' }}>
           <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 'clamp(22px, 3vw, 34px)', letterSpacing: 3, fontWeight: 700 }}>MORE THAN AN ASSISTANT</h2>
           <p className="t-sub" style={{ letterSpacing: 3, marginTop: 10, fontSize: 13, lineHeight: 1.7 }}>A PERSONAL AI ECOSYSTEM THAT UNDERSTANDS,<br />PLANS, AND ACTS WITH YOU.</p>
         </div>
-        <NeonButton variant="primary" size="lg" hex display chevron disabled={!ready} style={{ minWidth: 'min(420px, 90vw)', height: 64, fontSize: 20 }} onClick={() => nav('/signup')}>
-          {ready ? 'GET STARTED' : 'INITIALIZING…'}
-        </NeonButton>
+        <motion.div animate={ready && !reduceMotion ? { scale: [1, 1.05, 1] } : { scale: 1 }} transition={{ duration: 0.5, ease: EASE }}>
+          <NeonButton variant="primary" size="lg" hex display chevron disabled={!ready} style={{ minWidth: 'min(420px, 90vw)', height: 64, fontSize: 20 }} onClick={() => nav('/signup')}>
+            {ready ? 'GET STARTED' : 'INITIALIZING…'}
+          </NeonButton>
+        </motion.div>
         <div className="stack" style={{ alignItems: 'center', gap: 10 }}>
-          <div className="row" aria-hidden>{[0, 1, 2, 3, 4].map((i) => <span key={i} className={`dot ${i ? 'off' : 'cyan'}`} style={{ width: 10, height: 10 }} />)}</div>
+          <div className="row" aria-hidden>{[0, 1, 2, 3, 4].map((i) => <span key={i} className={`dot ${i < booted ? 'cyan' : 'off'}`} style={{ width: 10, height: 10, transition: 'background 0.3s' }} />)}</div>
           <span className="t-sub" style={{ letterSpacing: 4, fontSize: 11 }}>YOUR JOURNEY BEGINS</span>
           <Link to="/login" className="t-sub" style={{ marginTop: 4 }}>Already have an account? <span className="c-cyan">Log in</span></Link>
         </div>
@@ -151,6 +189,7 @@ export function Splash() {
 
 export function Login() {
   const nav = useNavigate();
+  useSkipIfSignedIn();
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [show, setShow] = useState(false);

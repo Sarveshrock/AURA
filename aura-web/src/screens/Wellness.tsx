@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Leaf, ClipboardList, Bell, BarChart3, Flower2, LayoutDashboard, Dumbbell, Utensils, Brain, Moon, HeartPulse, Target, ClipboardCheck, Mic,
-  GlassWater, Smile, Sun, Plus, Pause, Play, Activity, Droplets,
+  GlassWater, Pill, Smile, Sun, Plus, Pause, Play, Activity, Droplets,
 } from 'lucide-react';
 import { Hud, PageHero, NeonButton, NeonTabs, FilterDropdown, FuturisticModal, HudInput, SyncStatus, Bar, toast, toneHex, type Tone } from '../components/aura';
 import { AICommandPanel, domainAsk } from '../components/ai';
@@ -13,15 +14,17 @@ import Garden from '../components/wellness/Garden';
 import { TARGETS, type DayLog, type PlanArea, type PlanItem, type WellnessIcon } from '../data/wellness';
 import { cycleStats } from '../data/cycle';
 import { computeVibe, computeXP, computeQuests, computeAchievements, computeRecords } from '../data/wellnessWorld';
+import NextDoseCard from '../components/wellness/NextDoseCard';
+import MedicineTab from '../components/wellness/MedicineTab';
 import PeriodTab from '../components/wellness/PeriodTab';
 import { wellnessPlanStore, metricsStore, dayLogsStore, mealsStore, habitsStore, periodStore, wellnessEventsStore } from '../state/stores';
 import { uid } from '../state/store';
 import { usePageSearch, matches } from '../state/search';
 import { useShowPeriodTracker } from '../state/user';
 
-const TABS = ['Overview', 'Fitness', 'Nutrition', 'Mindfulness', 'Sleep', 'Health Metrics', 'Habit Tracker', 'Period Tracker', 'Wellness Plan'] as const;
+const TABS = ['Overview', 'Fitness', 'Nutrition', 'Mindfulness', 'Sleep', 'Health Metrics', 'Habit Tracker', 'Medicines', 'Period Tracker', 'Wellness Plan'] as const;
 type Tab = (typeof TABS)[number];
-const tabIcons = { Overview: LayoutDashboard, Fitness: Dumbbell, Nutrition: Utensils, Mindfulness: Flower2, Sleep: Moon, 'Health Metrics': HeartPulse, 'Habit Tracker': Target, 'Period Tracker': Droplets, 'Wellness Plan': ClipboardCheck };
+const tabIcons = { Overview: LayoutDashboard, Fitness: Dumbbell, Nutrition: Utensils, Mindfulness: Flower2, Sleep: Moon, 'Health Metrics': HeartPulse, 'Habit Tracker': Target, Medicines: Pill, 'Period Tracker': Droplets, 'Wellness Plan': ClipboardCheck };
 const AREAS: PlanArea[] = ['Mindfulness', 'Fitness', 'Nutrition', 'Sleep'];
 const areaIcon: Record<PlanArea, WellnessIcon> = { Mindfulness: 'flame', Fitness: 'dumbbell', Nutrition: 'utensils', Sleep: 'moon' };
 const areaTone: Record<PlanArea, Tone> = { Mindfulness: 'red', Fitness: 'magenta', Nutrition: 'cyan', Sleep: 'violet' };
@@ -91,7 +94,8 @@ export default function Wellness() {
   const periods = periodStore.use();
   const events = wellnessEventsStore.use();
   const showPeriod = useShowPeriodTracker();
-  const [tabRaw, setTab] = useState<Tab>('Overview');
+  const [params] = useSearchParams();
+  const [tabRaw, setTab] = useState<Tab>(() => { const t = params.get('tab'); return (TABS as readonly string[]).includes(t ?? '') ? (t as Tab) : 'Overview'; });
   const visibleTabs: readonly Tab[] = showPeriod ? TABS : TABS.filter((t) => t !== 'Period Tracker');
   const tab: Tab = visibleTabs.includes(tabRaw) ? tabRaw : 'Overview';
   const [week, setWeek] = useState<'This Week' | 'Last Week'>('This Week');
@@ -208,7 +212,9 @@ export default function Wellness() {
 
         <NeonTabs wrap tabs={visibleTabs as unknown as typeof TABS} value={tab} onChange={setTab} icons={tabIcons} />
 
-        {tab === 'Period Tracker' ? (
+        {tab === 'Medicines' ? (
+          <MedicineTab />
+        ) : tab === 'Period Tracker' ? (
           <PeriodTab />
         ) : tab === 'Habit Tracker' ? (
           <Hud corners title="Habit Tracker" sub="Tap a day to mark it done." action="Add habit" onAction={() => setDialog('habit')}>
@@ -231,6 +237,7 @@ export default function Wellness() {
             {tab === 'Overview' && (
               <div className="stack" style={{ gap: 16, marginBottom: 16 }}>
                 <VibeCard vibe={vibe} mood={mood} />
+                <NextDoseCard onOpen={() => setTab('Medicines')} />
                 {(mood === 'Stressed' || mood === 'Low') && (
                   <button className="tile row" style={{ gap: 10, width: '100%', textAlign: 'left', ['--bd' as string]: `${toneHex.amber}88` }} onClick={() => setSession({ title: '3 min Stress Relief', minutes: 3 })}>
                     <Sun size={22} style={{ color: toneHex.amber }} />

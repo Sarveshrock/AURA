@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
   Home, MessageSquare, Mic, Workflow, Scale, SquareCheck, CalendarDays, ShoppingBag, Plane, Wallet, Heart, Search,
   BrainCircuit, RefreshCcw, LayoutGrid, Settings, Bell, Crown, Menu, ChevronDown, BarChart3, HelpCircle, Network,
   type LucideIcon,
 } from 'lucide-react';
 import { ToastHost } from '../ui';
+import { pageVariants } from '../motion';
 import { SearchProvider, useSearchCtx } from '../../state/search';
 import { useUser } from '../../state/user';
 import PeriodReminder from '../wellness/PeriodReminder';
+import MedicineSync from '../wellness/MedicineSync';
+import CompanionHost from './CompanionHost';
 
 export interface NavItem { to: string; label: string; icon: LucideIcon }
 
@@ -183,6 +187,7 @@ export default function AuraShell() {
   const loc = useLocation();
   const [open, setOpen] = useState(false);
   const [palette, setPalette] = useState(false);
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     setOpen(false);
@@ -206,8 +211,18 @@ export default function AuraShell() {
       <AuraSidebar open={open} />
       <div className="main">
         <AuraTopbar onMenu={() => setOpen(true)} onPalette={() => setPalette(true)} />
-        <main className="content page-enter" key={loc.pathname} id="main">
-          <Outlet />
+        <main className="content" id="main">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={loc.pathname}
+              variants={pageVariants}
+              initial={reduceMotion ? false : 'initial'}
+              animate="animate"
+              exit="exit"
+            >
+              <Outlet />
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
       <nav className="bottom-nav" aria-label="Mobile">
@@ -219,6 +234,8 @@ export default function AuraShell() {
       </nav>
       {palette && <CommandPalette onClose={() => setPalette(false)} />}
       <PeriodReminder />
+      <MedicineSync />
+      <CompanionHost />
       <ToastHost />
     </div>
     </SearchProvider>

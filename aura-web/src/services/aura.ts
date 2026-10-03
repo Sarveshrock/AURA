@@ -21,7 +21,16 @@ export interface PlanTask { title: string; agent?: string | null; dependencies?:
 export interface DecisionOption { title: string; tradeoffs: string; risk: string }
 export interface Decision { options: DecisionOption[]; recommendation: string; agentsConsulted?: string[] }
 
+export interface ConverseAction { type: string; args: Record<string, unknown> }
+export interface ConverseReply { say: string; actions: ConverseAction[] }
+
 export const aura = {
+  /** Fast single-call companion reply (short, spoken style) that may also ask the app to do things. See ai-service/app/routers/companion.py. */
+  async converse(message: string, opts: { context?: string; history?: { role: 'user' | 'aura'; text: string }[]; pending?: string } = {}): Promise<ConverseReply> {
+    const res = await apiSend<{ say: string; do: ConverseAction[] }>('POST', '/chat/converse', { message, ...opts });
+    return { say: res.say, actions: res.do ?? [] };
+  },
+
   /** `context` is a short summary of the user's own data for the domain being discussed. */
   async chat(message: string, context?: string): Promise<ChatReply> {
     const style = preferencesStore.get()[0]?.responseStyle;

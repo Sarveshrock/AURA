@@ -12,6 +12,9 @@ import type { Paper, ResearchProject } from '../data/research';
 import type { Booking, TravelFeedback, TripPlan } from '../data/trips';
 import type { DayLog, Habit, Meal, Metric, PeriodEntry, PeriodPrefs, PlanItem } from '../data/wellness';
 import type { WellnessEvent } from '../data/wellnessWorld';
+import type { DoseLog, MedOrder, Medicine } from '../data/medicine';
+import type { OrderPrefs } from '../services/orderIntent';
+import type { CompanionPrefs } from '../services/companion';
 
 /**
  * App state. Every list below is persisted per-user through the backend
@@ -49,12 +52,22 @@ export interface Preferences { id: string; responseStyle: 'Balanced' | 'Concise'
 export const preferencesStore = createRecordStore<Preferences>('preferences');
 export const periodStore = createRecordStore<PeriodEntry>('wellness_period');
 export const periodPrefsStore = createRecordStore<PeriodPrefs>('wellness_period_prefs');
+/** Medicine schedules, per-dose taken/skipped logs and pharmacy orders — see data/medicine.ts. */
+export const medicinesStore = createRecordStore<Medicine>('wellness_medicines');
+export const doseLogsStore = createRecordStore<DoseLog>('wellness_dose_logs');
+export const medOrdersStore = createRecordStore<MedOrder>('wellness_med_orders');
 export const habitsStore = createRecordStore<Habit>('wellness_habits');
 /** Mindfulness session completions — powers XP/quests/achievements/records for the one wellness activity no existing store captures. */
 export const wellnessEventsStore = createRecordStore<WellnessEvent>('wellness_events');
 
 export interface RunLog { id: string; name: string; when: string; status: 'Completed' | 'Failed' | 'Awaiting approval'; summary?: string }
 export const runsStore = createRecordStore<RunLog>('automation_runs');
+
+/** Remembered answers for order requests: the store you use and the variant/size you picked last time. */
+export const orderPrefsStore = createRecordStore<OrderPrefs>('order_prefs');
+
+/** Voice companion settings: on/off, quiet hours, and when each check-in was last spoken. */
+export const companionPrefsStore = createRecordStore<CompanionPrefs>('companion_prefs');
 
 export const planStore = createStore<PlanId>('free');
 

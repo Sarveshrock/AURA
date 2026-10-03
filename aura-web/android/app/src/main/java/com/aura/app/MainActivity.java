@@ -8,6 +8,8 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(AuraCartAssistantPlugin.class);
+        registerPlugin(AuraMedicinePlugin.class);
+        registerPlugin(AuraPhonePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }
