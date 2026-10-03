@@ -18,7 +18,10 @@ const REFRESH_MS = 45_000;
 export default function MedicineSync() {
   const meds = medicinesStore.use();
   const logs = doseLogsStore.use();
-  const loaded = medicinesStore.useMeta().status === 'ready' && doseLogsStore.useMeta().status === 'ready';
+  // Read both statuses on every render: a short-circuiting && would skip a hook and crash React.
+  const medsReady = medicinesStore.useMeta().status === 'ready';
+  const logsReady = doseLogsStore.useMeta().status === 'ready';
+  const loaded = medsReady && logsReady;
   const timer = useRef<number>();
 
   // Arm reminders for every dose in the next 48h that has not been logged.

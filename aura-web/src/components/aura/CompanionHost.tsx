@@ -20,7 +20,8 @@ export default function CompanionHost() {
   const st = companionStore.use();
   const prefsList = companionPrefsStore.use();
   const prefs = { ...DEFAULT_COMPANION_PREFS, ...prefsList[0] };
-  const loaded = [companionPrefsStore, medicinesStore, doseLogsStore, mealsStore, dayLogsStore].every((s) => s.useMeta().status === 'ready');
+  // .map (not .every) so every store's hook runs on every render.
+  const loaded = [companionPrefsStore, medicinesStore, doseLogsStore, mealsStore, dayLogsStore].map((s) => s.useMeta().status === 'ready').every(Boolean);
   const [open, setOpen] = useState(false);
   const navRef = useRef(nav);
   navRef.current = nav;
