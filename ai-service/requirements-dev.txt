@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest>=8
+# only for tests/test_travel_features_parity.py, which imports the training script
+scikit-learn>=1.5
+optuna>=4

@@ -18,7 +18,8 @@ class LLMServiceError(Exception):
 
 
 class LLMProvider:
-    async def chat(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int | None = None) -> str:
+    async def chat(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int | None = None,
+                   model: str | None = None, timeout: float = 60, retries: int = 3) -> str:
         raise NotImplementedError
 
 
@@ -45,12 +46,13 @@ class _OpenAICompatibleProvider(LLMProvider):
     label: str
     supports_json_mode: bool = True
 
-    async def chat(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int | None = None) -> str:
+    async def chat(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int | None = None,
+                   model: str | None = None, timeout: float = 60, retries: int = 3) -> str:
         if not self.api_key:
             raise LLMServiceError(f"{self.label} API key is not configured.")
 
         payload: dict[str, Any] = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": messages,
             "temperature": 0.4,
         }
@@ -62,9 +64,9 @@ class _OpenAICompatibleProvider(LLMProvider):
         # Hosted models occasionally return a transient 5xx or drop the connection; retry those a couple of times.
         resp: httpx.Response | None = None
         last_error = ""
-        for attempt in range(3):
+        for attempt in range(retries):
             try:
-                async with httpx.AsyncClient(timeout=60) as client:
+                async with httpx.AsyncClient(timeout=timeout) as client:
                     resp = await client.post(
                         f"{self.base_url}/chat/completions",
                         headers={
@@ -80,7 +82,7 @@ class _OpenAICompatibleProvider(LLMProvider):
                 if resp.status_code < 500 and resp.status_code != 429:
                     break
                 last_error = f"{resp.status_code}: {resp.text[:200]}"
-            if attempt < 2:
+            if attempt < retries - 1:
                 await asyncio.sleep(1.5 * (attempt + 1))
         if resp is None or resp.status_code >= 500 or resp.status_code == 429:
             raise LLMServiceError(f"{self.label} is temporarily unavailable ({last_error})")
@@ -145,15 +147,19 @@ class LLMService:
     def __init__(self, provider: LLMProvider):
         self._provider = provider
 
-    async def chat(self, messages: list[dict[str, str]], *, max_tokens: int | None = None) -> str:
-        return await self._provider.chat(messages, max_tokens=max_tokens)
+    async def chat(self, messages: list[dict[str, str]], *, max_tokens: int | None = None, model: str | None = None,
+                   timeout: float = 60, retries: int = 3) -> str:
+        return await self._provider.chat(messages, max_tokens=max_tokens, model=model, timeout=timeout, retries=retries)
 
-    async def chat_json(self, messages: list[dict[str, str]], *, max_tokens: int | None = None) -> dict[str, Any]:
+    async def chat_json(self, messages: list[dict[str, str]], *, max_tokens: int | None = None, model: str | None = None,
+                        timeout: float = 60, retries: int = 3) -> dict[str, Any]:
+        """model/timeout/retries override the provider defaults for latency-sensitive callers (the cart agent)."""
         json_instruction = {
             "role": "system",
             "content": "Respond with ONLY a single valid JSON object. No markdown, no commentary.",
         }
-        raw = await self._provider.chat([json_instruction, *messages], json_mode=True, max_tokens=max_tokens)
+        raw = await self._provider.chat([json_instruction, *messages], json_mode=True, max_tokens=max_tokens, model=model,
+                                        timeout=timeout, retries=retries)
         candidate = _extract_json_object(raw)
         try:
             return json.loads(candidate)

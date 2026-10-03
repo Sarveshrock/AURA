@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from app.agents.base import BaseAgent
+from app.agents.shopping_agent import ShoppingAgent
+from app.agents.travel_agent import TravelAgent
 from app.models.schemas import AgentResult
 from app.services.llm_service import LLMServiceError
 
@@ -20,12 +22,10 @@ def _make_agent(agent_name: str, system_prompt: str) -> type[BaseAgent]:
     return _Agent
 
 
-TravelAgent = _make_agent("travel", "You are AURA's Travel Agent. Give concise, structured travel insights.")
 FinanceAgent = _make_agent("finance", "You are AURA's Finance Agent. Assess budget impact concisely.")
 ProductivityAgent = _make_agent(
     "productivity", "You are AURA's Productivity Agent. Identify scheduling and task-priority insights."
 )
-ShoppingAgent = _make_agent("shopping", "You are AURA's Shopping Agent. Compare options against stated needs/budget.")
 ResearchAgent = _make_agent("research", "You are AURA's Research Agent. Summarize relevant information concisely.")
 CalendarAgent = _make_agent("calendar", "You are AURA's Calendar Agent. Detect conflicts and buffer requirements.")
 WellnessAgent = _make_agent("wellness", "You are AURA's Wellness Agent. Give careful, non-diagnostic guidance.")

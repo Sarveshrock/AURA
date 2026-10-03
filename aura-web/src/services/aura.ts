@@ -6,6 +6,7 @@
 import { apiGet, apiSend } from './api';
 import { recordAgentActivity } from '../state/agentActivity';
 import { preferencesStore } from '../state/stores';
+import { startQuickCart, type CartJob } from './extension';
 
 export type StepStatus = 'done' | 'processing' | 'pending';
 export interface PlanStep { label: string; status: StepStatus }
@@ -15,6 +16,10 @@ export interface ChatReply {
   text: string;
   /** Agents the coordinator consulted for this message. */
   agents: string[];
+  /** Structured per-agent output (e.g. shopping forecast, travel offers). */
+  agentData: Record<string, Record<string, unknown>>;
+  /** Set when the shopping agent turned the message into a cart job; it has already been started. */
+  cartOrder?: CartJob;
 }
 
 export interface PlanTask { title: string; agent?: string | null; dependencies?: string[] }
@@ -35,11 +40,21 @@ export const aura = {
   async chat(message: string, context?: string): Promise<ChatReply> {
     const style = preferencesStore.get()[0]?.responseStyle;
     const styleNote = style && style !== 'Balanced' ? `\n\n(Reply style: ${style.toLowerCase()}.)` : '';
-    const res = await apiSend<{ reply: string; agentsConsulted: string[] }>('POST', '/chat', {
+    const res = await apiSend<{ reply: string; agentsConsulted: string[]; agentData?: Record<string, Record<string, unknown>> }>('POST', '/chat', {
       message: (context ? `${message}\n\nContext from the user's data:\n${context}` : message) + styleNote,
     });
     if (res.agentsConsulted.length) recordAgentActivity(res.agentsConsulted, message.slice(0, 80));
-    return { text: res.reply, agents: res.agentsConsulted };
+    const agentData = res.agentData ?? {};
+    // A shopping command ("order milk and eggs from Zepto", "get my usual groceries") runs hands-free:
+    // the cart agent starts right away and stops at the cart.
+    const order = agentData.shopping?.cartOrder as Omit<CartJob, 'logged'> | undefined;
+    const cartOrder = order?.items?.length
+      // not "logged": what actually lands in the cart is recorded as the order when the job finishes
+      ? { store: order.store, startUrl: order.startUrl, androidPackage: order.androidPackage, appLabel: order.appLabel,
+          items: order.items, syncHistory: order.syncHistory, resolved: order.resolved }
+      : undefined;
+    if (cartOrder) void startQuickCart(cartOrder);
+    return { text: res.reply, agents: res.agentsConsulted, agentData, cartOrder };
   },
 
   async plan(goal: string): Promise<PlanTask[]> {

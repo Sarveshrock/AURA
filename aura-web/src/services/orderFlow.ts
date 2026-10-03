@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import type { AIAction, AIReply } from '../components/ai';
 import { orderPrefsStore } from '../state/stores';
 import { AuraMedicine } from '../native/medicine';
-import { extensionStore, startQuickCart, PLATFORM_LABEL, type QuickCartPlatform } from './extension';
+import { startQuickCart, type CartJob } from './extension';
 import {
   DEFAULT_ORDER_PREFS, PLATFORMS_FOR, PLATFORM_NAMES, applyMemory, applyOption, defaultPlatform, labelFor, missingDims, optionsFor,
   parseOrderRequest, questionFor, rememberPick, toLine, type OrderPlatform, type OrderPrefs, type OrderRequest, type ParsedItem,
@@ -12,6 +12,8 @@ const cancel: AIAction = { label: 'Cancel', run: () => 'Okay — nothing was ord
 const getPrefs = (): OrderPrefs => orderPrefsStore.get()[0] ?? DEFAULT_ORDER_PREFS;
 const savePrefs = (p: OrderPrefs) => orderPrefsStore.set([{ ...p, id: 'prefs' }]);
 
+/** Store names as the cart agent knows them. */
+const STORE_NAME: Record<OrderPlatform, string> = { blinkit: 'Blinkit', zepto: 'Zepto', instamart: 'Swiggy Instamart', swiggy: 'Swiggy', zomato: 'Zomato' };
 const ZOMATO = { pkg: 'com.application.zomato', url: 'https://www.zomato.com/' };
 
 /** Where a request goes if the caller should leave the current screen (Chat/Voice). null = not an order, carry on as usual. */
@@ -36,6 +38,8 @@ export function startOrder(text: string, goTo: (path: string) => void): AIReply 
       actions: [{ label: 'Open Medicines', variant: 'primary', run: () => { goTo('/wellness?tab=Medicines'); return 'Opened Medicines.'; } }, cancel],
     };
   }
+  // Things the catalog doesn't know (earbuds, a specific brand of shampoo…) are the shopping agent's job, not ours.
+  if (req.category === 'other') return null;
   const prefs = getPrefs();
   return step(req, req.items.map((i) => applyMemory(i, prefs)), req.platform, false);
 }
@@ -90,11 +94,19 @@ function execute(platform: OrderPlatform, items: ParsedItem[], category: 'grocer
     return { text: `Opened Zomato. Search for “${list}” there (it's copied) — Zomato can't be filled in automatically, so you choose the restaurant and pay in its app.${tip}` };
   }
 
-  if (!Capacitor.isNativePlatform() && !extensionStore.get().installed) {
-    return { text: `To fill your cart on ${PLATFORM_LABEL[platform as QuickCartPlatform]} automatically, install the AURA Cart Assistant browser extension first — see the "Quick Cart" panel.` };
+  // Hand the clarified order to the cart agent (GitHub's AI agent: opens the store and fills the cart, stops before payment).
+  const lines = items.map((i) => ({ name: toLine(i).name, qty: i.qty }));
+  // Explicit variant/brand/size => add exactly that. Otherwise let the server pick the user's usual product.
+  const explicit = items.every((i) => Object.keys(i.choices).length > 0 || !!i.brand);
+  const job: CartJob = { store: STORE_NAME[platform], items: lines, resolved: explicit };
+  if (platform === 'swiggy') {
+    // Swiggy food: open the dish search on the website; the agent has to switch from Restaurants to Dishes there.
+    job.startUrl = `https://www.swiggy.com/search?query=${encodeURIComponent(lines[0].name)}`;
+    void startQuickCart(job, 'web');
+  } else {
+    void startQuickCart(job);
   }
-  startQuickCart(platform as QuickCartPlatform, items.map(toLine));
   return {
-    text: `Opening ${PLATFORM_NAMES[platform]} and adding ${names}. I only add a product that matches exactly — if I can't find it I'll tell you instead of guessing. I stop before payment; you review the cart and pay yourself.${tip}`,
+    text: `Opening ${PLATFORM_NAMES[platform]} and adding ${names}. I stop at the cart — you review it and pay yourself.${tip}`,
   };
 }
