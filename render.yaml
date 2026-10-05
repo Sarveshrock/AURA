@@ -1,0 +1,70 @@
+# Render Blueprint: runs AURA's server 24/7 so the phone app works with your PC off.
+# Render dashboard -> New -> Blueprint -> pick this repo. Fill the secrets marked `sync: false` when asked.
+# Paid plans are used on purpose: Render's free web services sleep after 15 minutes without traffic, which would
+# make "Hey Aura" wait ~1 minute for a cold start, and free services have no private networking or disks.
+services:
+  # Public API the phone talks to (Node). The only thing exposed to the internet.
+  - type: web
+    name: aura-backend
+    runtime: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PYTHON_AI_URL
+        value: http://aura-ai:8000
+      # the phone app runs from https://localhost inside its WebView
+      - key: CORS_ORIGINS
+        value: https://localhost,capacitor://localhost
+      - key: VOICE_PROVIDER
+        value: gemini
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+
+  # AI service (Python): private, reachable only from aura-backend. Keeps the learned shopping model on a disk.
+  - type: pserv
+    name: aura-ai
+    runtime: docker
+    dockerContext: ./ai-service
+    dockerfilePath: ./ai-service/Dockerfile
+    plan: starter
+    disk:
+      name: aura-ai-data
+      mountPath: /app/app/data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: ENVIRONMENT
+        value: production
+      - key: LLM_PROVIDER
+        value: nvidia          # "nvidia" | "grok" | "openrouter"
+      - key: VOICE_PROVIDER
+        value: gemini
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GROK_API_KEY
+        sync: false
+      - key: VISION_MODEL      # model that reads screenshots; empty = default for the provider
+        value: ""
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SERPAPI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

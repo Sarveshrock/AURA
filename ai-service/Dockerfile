@@ -14,7 +14,10 @@ COPY data ./data
 # runtime state the service writes: the fine-tuned shopping model, the interest models
 RUN mkdir -p /app/app/data && chown -R aura /app/app/data
 
-USER aura
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+# runs as root just long enough to chown the data directory, then drops to `aura` (see entrypoint.sh)
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 EXPOSE 8000
 
