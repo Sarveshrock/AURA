@@ -82,6 +82,12 @@ export const aiClient = {
   cartAgentStep: (payload: Record<string, unknown>) =>
     callAi<Record<string, unknown>>('/ai/shopping/browse/step', payload),
 
+  screenStep: (payload: Record<string, unknown>) =>
+    callAi<Record<string, unknown>>('/ai/screen/step', payload),
+
+  screenVisualSearch: (payload: { image: string; hint?: string; maxResults?: number }) =>
+    callAi<Record<string, unknown>>('/ai/screen/visual-search', payload),
+
   rankShopping: (products: unknown[]) =>
     callAi<{ data: unknown[]; modelStatus: string }>('/ai/shopping/suggestions', { products }),
 

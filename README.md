@@ -222,6 +222,26 @@ curl "localhost:8001/ai/shopping/model"             # base or fine-tuned, last r
 curl -X DELETE "localhost:8001/ai/shopping/events/session?userId=USER_000001"   # forget test events
 ```
 
+## Screen assistant (phone app)
+
+The Android app's accessibility service lets AURA see the phone's screen and act on a spoken command ("Hey Aura, ..."). One service, four jobs:
+
+| Say / happens | What it does | Where |
+|---|---|---|
+| "what's on my screen", "tap the second video", "like this post", "scroll down" | Reads the foreground app's screen (accessibility tree, plus a screenshot when the words aren't enough), asks the server for **one** next action, performs it through the element's own click action, checks the new screen, repeats (max 12 steps / 80 s, with a Stop bar on screen). "Scroll" needs no server. | `ScreenAgent.java`, `ai-service/app/services/screen_agent.py` (`POST /ai/screen/step`) |
+| "find this", "where can I buy this", "find the red shoes on screen" | Screenshots the screen; a vision model names the product; live prices come from the same SerpAPI search as Shopping. The matches open in Shopping (`/shopping` with `state.search`). | `ScreenAgent.visualSearch`, `POST /ai/screen/visual-search` |
+| A YouTube ad shows | Presses "Skip ad" as soon as the button appears (found by meaning, press verified). Settable in Memory → On your phone. | `AdSkipper.java`, `YouTubeAdapter.java` |
+| Learning (opt-in) | Counts which apps and when, kinds of tap (Like, Share, Send...), who you chat with on WhatsApp, topics you like on Instagram/YouTube. | `ActivityLearner.java`, `ActivityProfile.java` |
+
+**Limits that are enforced, not just promised**
+- Banking, payment, wallet, password-manager, authenticator, brokerage and system-security/Play Store/Settings screens are never read, screenshotted, acted in or learned from (`ScreenPolicy.blocked`).
+- Payment, OTP and password controls are never pressed, and nothing is typed into a password field. Enforced on the phone and again on the server (`validate_step`).
+- Anything that sends, posts, deletes, orders or buys (and share/follow/call, unless the user asked for it) is confirmed by voice first.
+- It only starts from a spoken command. Only the screen task's elements and, when needed, one downscaled screenshot go to the server; nothing is stored there.
+- Learning is **off until the user turns it on**. It stores counters only: no message text, no typed text (the service doesn't even subscribe to typing events), and a tap is recorded only if its label is one of a fixed list of verbs. The profile is a file on the phone; contact names never leave it. The assistant is given one sentence about habits (apps, hours, topics) with no names. Memory → On your phone shows everything and has a wipe button.
+
+**Setup:** set `VISION_MODEL` (see `.env.example`) to a vision-capable model id for your `LLM_PROVIDER`. Screenshots need Android 11+ and the accessibility service turned off and on once after updating (Android asks again when a service gains a capability).
+
 ## Not built yet
 
 - Per-retailer shopping APIs (each needs an approved partner account), real banking data, and email/food/cab integrations.

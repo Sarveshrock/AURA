@@ -90,7 +90,7 @@ final class ActionRouter {
             }
         }
         if (Intents.parse(t).type != Intents.Type.NONE) return 2;
-        if (AppActions.isCommand(t)) return 2;
+        if (AppActions.isCommand(t) || ScreenIntents.isCommand(t)) return 2;
         return 0;
     }
 
@@ -159,6 +159,11 @@ final class ActionRouter {
             int i = ConversationContext.ordinal(low, cx.searchResults.size());
             if (i >= 0) { AppActions.playResult(ctx, cx, i, false, done); return true; }
         }
+        ScreenIntents.Parsed screen = ScreenIntents.parse(t);
+        if (screen.kind != ScreenIntents.Kind.NONE && ScreenAgent.claims(ctx, screen)) {
+            ScreenAgent.handle(ctx, screen, done);
+            return true;
+        }
         return AppActions.handle(ctx, t, cx, done);
     }
 
@@ -169,6 +174,7 @@ final class ActionRouter {
         String low = t.toLowerCase(Locale.ROOT);
         ConversationContext.Task task = p.task;
         if (Intents.cancel(low)) {
+            if (task != null && task.type == Intents.Type.SCREEN_TASK) ScreenAgent.cancel(task);
             reply(done, ActionResult.Status.CANCELLED, "cancel", "Okay, cancelled.");
             return true;
         }
@@ -219,6 +225,7 @@ final class ActionRouter {
                     return true;
                 }
                 if (Intents.no(low)) {
+                    if (task.type == Intents.Type.SCREEN_TASK) ScreenAgent.cancel(task);
                     reply(done, ActionResult.Status.CANCELLED, task.type.name(),
                             task.type == Intents.Type.WA_MESSAGE ? "Okay, I won't send it." : "Okay, I won't.");
                     return true;
@@ -261,7 +268,7 @@ final class ActionRouter {
     }
 
     private static boolean isCommand(Context ctx, String t) {
-        return Intents.parse(t).type != Intents.Type.NONE || AppActions.isCommand(t);
+        return Intents.parse(t).type != Intents.Type.NONE || AppActions.isCommand(t) || ScreenIntents.isCommand(t);
     }
 
     // ------------------------------------------------------------------ putting an action together
@@ -343,6 +350,9 @@ final class ActionRouter {
                 } else {
                     WhatsAppAgent.send(ctx, task, done);
                 }
+                break;
+            case SCREEN_TASK:
+                ScreenAgent.resume(ctx, task, done);
                 break;
             default:
                 reply(done, ActionResult.Status.UNSUPPORTED, task.type.name(), "I can't do that yet.");

@@ -188,4 +188,21 @@ class LLMService:
             raise LLMServiceError(f"Model did not return valid JSON: {raw}") from exc
 
 
+    async def vision_json(self, messages: list[dict[str, Any]], *, max_tokens: int | None = None,
+                          timeout: float = 60) -> dict[str, Any]:
+        """Like chat_json, for messages that carry images (content as a list with {"type": "image_url"} parts).
+        Uses settings.vision_model_id with no fallback list: the NVIDIA backups are text-only models."""
+        json_instruction = {
+            "role": "system",
+            "content": "Respond with ONLY a single valid JSON object. No markdown, no commentary.",
+        }
+        raw = await self._provider.chat([json_instruction, *messages], json_mode=True,
+                                        max_tokens=max_tokens or settings.llm_default_max_tokens or None,
+                                        model=settings.vision_model_id, timeout=timeout, retries=2)
+        try:
+            return json.loads(_extract_json_object(raw))
+        except json.JSONDecodeError as exc:
+            raise LLMServiceError(f"Model did not return valid JSON: {raw}") from exc
+
+
 llm_service = LLMService(_build_provider())

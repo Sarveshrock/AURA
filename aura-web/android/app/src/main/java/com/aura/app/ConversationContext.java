@@ -30,6 +30,7 @@ final class ConversationContext {
         String message;
         boolean video;
         boolean confirmed;
+        Object screen;                // a ScreenAgent.Session waiting for a yes (SCREEN_TASK)
 
         String who() {
             return contact != null ? contact.name : number != null ? number : name;

@@ -12,6 +12,7 @@ import { memoriesStore } from '../state/stores';
 import { uid } from '../state/store';
 import { usePageSearch, matches } from '../state/search';
 import { browserVoice } from '../services/voice';
+import PhoneLearningCard from '../components/aura/PhoneLearningCard';
 
 const TABS = ['All Memories', 'Notes', 'Links', 'Files', 'Images', 'Videos', 'Voice', 'Favorites', 'Trash'] as const;
 type Tab = (typeof TABS)[number];
@@ -191,6 +192,7 @@ export default function Memory() {
             {live.length > 0 && <div className="li"><IconBox icon={Briefcase} tone="green" size="sm" /><div className="grow"><div className="t-sub">Most active category</div><b>{topCat}</b><div style={{ marginTop: 4 }}><Bar value={topShare} tone="blue" /></div></div><span>{topShare}%</span></div>}
           </div>
         </Hud>
+        <PhoneLearningCard />
       </div>
 
       {editing && (

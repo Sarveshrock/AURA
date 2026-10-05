@@ -64,6 +64,10 @@ export default function Shopping() {
 
   useEffect(() => { if (cat !== 'All') void run(categoryQuery[cat]); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [cat]);
 
+  // "Hey Aura, find this" (a product seen on the phone's screen) opens here with the search it worked out
+  const handedSearch = (loc.state as { search?: string } | null)?.search;
+  useEffect(() => { if (handedSearch) { setDraft(handedSearch); void run(handedSearch); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [handedSearch]);
+
   const submit = (e: FormEvent) => { e.preventDefault(); setCat('All'); void run(draft); };
 
   /** Snapshots an interested/not-interested reaction for the daily interest model. */

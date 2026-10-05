@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
  */
 final class Intents {
 
-    enum Type { NONE, CALL, END_CALL, WA_OPEN, WA_MESSAGE, WA_CALL }
+    enum Type { NONE, CALL, END_CALL, WA_OPEN, WA_MESSAGE, WA_CALL, SCREEN_TASK }
 
     static final class Parsed {
         Type type = Type.NONE;

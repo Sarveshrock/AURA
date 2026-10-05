@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routers import ai, companion, research, shopping, travel, voice
+from app.routers import ai, companion, research, screen, shopping, travel, voice
 from app.services import recommendation_service as reco
 
 logger = structlog.get_logger()
@@ -49,6 +49,7 @@ app.include_router(ai.router)
 app.include_router(companion.router)
 app.include_router(voice.router)
 app.include_router(shopping.router)
+app.include_router(screen.router)
 app.include_router(travel.router)
 app.include_router(research.router)
 

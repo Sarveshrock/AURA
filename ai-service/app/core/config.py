@@ -81,5 +81,19 @@ class Settings(BaseSettings):
         return (self.shopping_agent_model or None) if self.llm_provider == "nvidia" else None
     shopping_agent_timeout_s: float = 25.0
 
+    # Screen agent (the phone reads the screen and acts on spoken commands) and visual product search.
+    # Screens that need a look at the pixels are sent to a vision-capable model. Set VISION_MODEL to an id that exists
+    # on the active provider (NVIDIA / Grok / OpenRouter ids differ). Left empty, a sensible default per provider is
+    # used (see vision_model_id); hosted models get retired, so set it in .env if the default is gone.
+    vision_model: str = ""
+    screen_agent_timeout_s: float = 40.0
+
+    @property
+    def vision_model_id(self) -> str | None:
+        """The model for screenshots, or None to use the provider's main model (OpenRouter's Claude models accept images)."""
+        if self.vision_model:
+            return self.vision_model
+        return {"nvidia": "meta/llama-3.2-90b-vision-instruct", "grok": "grok-2-vision-latest"}.get(self.llm_provider)
+
 
 settings = Settings()

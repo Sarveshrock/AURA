@@ -89,23 +89,45 @@ public class AuraAccessibilityService extends AccessibilityService implements Ca
     private Button backButton;
 
     // ------------------------------------------------------------------ lifecycle
+    private ActivityLearner learner;
+    private AdSkipper adSkipper;
+    private Runnable externalStop;   // the Stop button of a screen task (not a cart job)
+
     @Override
     protected void onServiceConnected() {
         instance = this;
+        learner = new ActivityLearner(this);
+        adSkipper = new AdSkipper(this);
     }
 
     @Override
     public boolean onUnbind(Intent intent) {
         stopJob("AURA's accessibility access was turned off.");
+        stopScreenWork();
         instance = null;
         return super.onUnbind(intent);
     }
 
     @Override
     public void onDestroy() {
+        stopScreenWork();
         instance = null;
         network.shutdownNow();
+        imaging.shutdownNow();
         super.onDestroy();
+    }
+
+    /** Closes what the user-facing helpers had open: the learner's current session, and any screen task's bar. */
+    private void stopScreenWork() {
+        if (learner != null) {
+            learner.endSession(System.currentTimeMillis());
+            ActivityLearner.flush(this);
+        }
+        if (externalStop != null) {
+            Runnable stop = externalStop;
+            externalStop = null;
+            stop.run();
+        }
     }
 
     @Override
@@ -353,6 +375,119 @@ public class AuraAccessibilityService extends AccessibilityService implements Ca
         return null;
     }
 
+    // ------------------------------------------------------------------ screen assistant
+    // Used by ScreenAgent: read what is on the foreground app's screen, act on it by the element's own click action
+    // (never by screen position, except as the cart agent's last resort), and take a screenshot when the words on
+    // screen are not enough. Nothing here stores or sends anything; ScreenAgent decides what goes to the server.
+
+    /** The interface for the screen agent: {elements, pageText, package}. Null if `pkg` isn't on screen or a cart job runs. */
+    JSONObject screenSnapshot(String pkg) {
+        if (running || pkg == null) return null;
+        try {
+            List<AccessibilityNodeInfo> roots = appRoots(pkg);
+            if (roots.isEmpty()) return null;
+            nodes.clear();
+            JSONArray elements = new JSONArray();
+            StringBuilder text = new StringBuilder();
+            for (int i = 0; i < roots.size(); i++) {
+                if (roots.size() > 1) text.append(i == 0 ? "[popup/sheet on top] " : " [screen behind] ");
+                collect(roots.get(i), elements, text, 0);
+            }
+            return new JSONObject().put("elements", elements).put("package", pkg)
+                    .put("pageText", text.length() > 3000 ? text.substring(0, 3000) : text.toString());
+        } catch (Exception e) {
+            return null;   // the screen changed while it was being read
+        }
+    }
+
+    /** Performs one action from the screen agent on the elements of the latest screenSnapshot. Returns what happened. */
+    String performScreen(JSONObject action) {
+        return perform(action);
+    }
+
+    /** Scrolls the foreground app's main list one page. False if nothing could be scrolled. */
+    boolean scrollScreen(boolean down) {
+        String pkg = foregroundPackage();
+        List<AccessibilityNodeInfo> roots = pkg == null ? new java.util.ArrayList<>() : appRoots(pkg);
+        AccessibilityNodeInfo list = roots.isEmpty() ? null : firstScrollable(roots.get(0));
+        if (list != null && list.performAction(down ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) return true;
+        return swipe(down);
+    }
+
+    interface ScreenshotDone {
+        /** base64 JPEG (longest side 1024 px) or null with the reason it could not be taken. */
+        void onShot(String base64Jpeg, String error);
+    }
+
+    private final ExecutorService imaging = Executors.newSingleThreadExecutor();
+
+    /** Takes a screenshot (Android 11+, needs canTakeScreenshot in the service config) and reports it on the main thread. */
+    void captureScreen(ScreenshotDone done) {
+        if (Build.VERSION.SDK_INT < 30) {
+            done.onShot(null, "needs_android_11");
+            return;
+        }
+        try {
+            takeScreenshot(android.view.Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
+                @Override
+                public void onSuccess(ScreenshotResult result) {
+                    imaging.execute(() -> encodeShot(result, done));
+                }
+
+                @Override
+                public void onFailure(int errorCode) {
+                    // 2 = no screenshot permission yet (service needs re-enabling), 3 = too soon after the last one, 6 = the app blocks screenshots
+                    done.onShot(null, "screenshot_failed_" + errorCode);
+                }
+            });
+        } catch (Exception e) {
+            done.onShot(null, "screenshot_unavailable");
+        }
+    }
+
+    private void encodeShot(ScreenshotResult result, ScreenshotDone done) {
+        android.graphics.Bitmap hardware = null, soft = null, scaled = null;
+        String b64 = null, error = null;
+        try {
+            hardware = android.graphics.Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(), result.getColorSpace());
+            if (hardware == null) throw new IllegalStateException("no bitmap");
+            soft = hardware.copy(android.graphics.Bitmap.Config.ARGB_8888, false);
+            float k = Math.min(1f, 1024f / Math.max(soft.getWidth(), soft.getHeight()));
+            scaled = k < 1f ? android.graphics.Bitmap.createScaledBitmap(soft, Math.round(soft.getWidth() * k), Math.round(soft.getHeight() * k), true) : soft;
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, out);
+            b64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP);
+        } catch (Throwable t) {
+            error = "screenshot_unreadable";
+        } finally {
+            try { result.getHardwareBuffer().close(); } catch (Throwable ignored) { /* already closed */ }
+            if (scaled != null && scaled != soft) scaled.recycle();
+            if (soft != null) soft.recycle();
+            if (hardware != null) hardware.recycle();
+        }
+        final String shot = b64, why = error;
+        ui.post(() -> done.onShot(shot, why));
+    }
+
+    /** The AURA bar over the app while a screen task runs; Stop calls onStop. */
+    void showScreenBar(String message, Runnable onStop) {
+        ui.post(() -> {
+            externalStop = onStop;
+            showOverlay(message);
+        });
+    }
+
+    void setScreenBar(String message) {
+        ui.post(() -> setStatus(message));
+    }
+
+    void hideScreenBar() {
+        ui.post(() -> {
+            externalStop = null;
+            hideOverlay();
+        });
+    }
+
     // ------------------------------------------------------------------ job control
     /** Starts the active CartJobBridge job (mode "app") in the store's app. Called from the plugin. */
     void startJob() {
@@ -415,7 +550,11 @@ public class AuraAccessibilityService extends AccessibilityService implements Ca
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (!running || event == null || event.getPackageName() == null) return;
+        if (event == null || event.getPackageName() == null) return;
+        // always-on helpers; each does nothing unless the user turned it on / it is YouTube changing
+        if (adSkipper != null) adSkipper.onEvent(event);
+        if (learner != null) learner.onEvent(event);
+        if (!running) return;
         String pkg = event.getPackageName().toString();
         String target = CartJobBridge.getInstance().appPackage;
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
@@ -684,7 +823,9 @@ public class AuraAccessibilityService extends AccessibilityService implements Ca
                 return ok ? "typed" : "type failed";
             }
             case "scroll": {
-                AccessibilityNodeInfo target = node != null && node.isScrollable() ? node : firstScrollable(appRoots(CartJobBridge.getInstance().appPackage).isEmpty() ? null : appRoots(CartJobBridge.getInstance().appPackage).get(0));
+                String pkg = running ? CartJobBridge.getInstance().appPackage : foregroundPackage();
+                List<AccessibilityNodeInfo> roots = pkg == null ? new java.util.ArrayList<>() : appRoots(pkg);
+                AccessibilityNodeInfo target = node != null && node.isScrollable() ? node : firstScrollable(roots.isEmpty() ? null : roots.get(0));
                 if (target != null && target.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return "scrolled";
                 swipeUp();
                 return "swiped";
@@ -692,6 +833,9 @@ public class AuraAccessibilityService extends AccessibilityService implements Ca
             case "back":
                 performGlobalAction(GLOBAL_ACTION_BACK);
                 return "back";
+            case "home":
+                performGlobalAction(GLOBAL_ACTION_HOME);
+                return "home";
             default:
                 return "waited";
         }
@@ -732,13 +876,18 @@ public class AuraAccessibilityService extends AccessibilityService implements Ca
     }
 
     private void swipeUp() {
-        if (Build.VERSION.SDK_INT < 24) return;
+        swipe(true);
+    }
+
+    /** A swipe through the middle of the screen: finger up scrolls the content down (towards what is below). */
+    private boolean swipe(boolean fingerUp) {
+        if (Build.VERSION.SDK_INT < 24) return false;
         int h = getResources().getDisplayMetrics().heightPixels;
         int w = getResources().getDisplayMetrics().widthPixels;
         Path p = new Path();
-        p.moveTo(w / 2f, h * 0.75f);
-        p.lineTo(w / 2f, h * 0.3f);
-        dispatchGesture(new GestureDescription.Builder()
+        p.moveTo(w / 2f, h * (fingerUp ? 0.75f : 0.3f));
+        p.lineTo(w / 2f, h * (fingerUp ? 0.3f : 0.75f));
+        return dispatchGesture(new GestureDescription.Builder()
                 .addStroke(new GestureDescription.StrokeDescription(p, 0, 350)).build(), null, null);
     }
 
@@ -802,6 +951,11 @@ public class AuraAccessibilityService extends AccessibilityService implements Ca
             });
             backButton.setVisibility(View.GONE);
             stopButton = smallButton("Stop", v -> {
+                if (externalStop != null) {
+                    Runnable stop = externalStop;
+                    externalStop = null;
+                    stop.run();
+                }
                 if (running) stopJob("Stopped by you.");
                 hideOverlay();
             });

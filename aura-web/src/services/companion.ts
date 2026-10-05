@@ -12,6 +12,7 @@ import { orderDestination } from './orderFlow';
 import { shopAssist } from './shopping';
 import { startQuickCart } from './extension';
 import { AuraPhone } from '../native/phone';
+import { AuraScreen } from '../native/screen';
 
 /**
  * AURA's voice companion — the part that behaves like a nurse + assistant + listener.
@@ -91,7 +92,21 @@ function markMedicineTaken(nameHint: string | undefined, now = Date.now()): stri
   return [...new Set(pick.map((x) => x.dose.med.name))];
 }
 
+/**
+ * A short sentence about the user's phone habits (most-used apps and when, topics they engage with), from what the phone
+ * learned while the user had learning turned on. It names no people and quotes no messages. Cached: reading it must
+ * never delay a spoken reply, so a turn uses the last value and starts a refresh for the next one.
+ */
+let habits = '';
+let habitsAt = 0;
+function refreshHabits(): void {
+  if (!Capacitor.isNativePlatform() || Date.now() - habitsAt < 10 * 60_000) return;
+  habitsAt = Date.now();
+  AuraScreen.learned().then((l) => { habits = l.habits ?? ''; }).catch(() => { habits = ''; });
+}
+
 export function buildCompanionContext(): string {
+  refreshHabits();
   const now = Date.now();
   const d = new Date(now);
   const log = todayLog();
@@ -106,6 +121,7 @@ export function buildCompanionContext(): string {
     medicinesToday: meds.map((m) => `${m.med.name} ${m.med.dose} at ${fmtTime(m.time)}: ${doseState(m, logged.get(m.id), now)}`),
     tasksOpen: tasksStore.get().filter((t) => !t.done).slice(0, 5).map((t) => t.title),
     eventsToday: eventsStore.get().filter((e) => e.date === today()).slice(0, 5).map((e) => `${e.title} ${e.start ?? ''}`),
+    habits: habits || undefined,
   });
 }
 

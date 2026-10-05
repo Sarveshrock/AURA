@@ -13,6 +13,7 @@ import { useUser } from '../../state/user';
 import PeriodReminder from '../wellness/PeriodReminder';
 import MedicineSync from '../wellness/MedicineSync';
 import CompanionHost from './CompanionHost';
+import ScreenSync from './ScreenSync';
 
 export interface NavItem { to: string; label: string; icon: LucideIcon }
 
@@ -236,6 +237,7 @@ export default function AuraShell() {
       <PeriodReminder />
       <MedicineSync />
       <CompanionHost />
+      <ScreenSync />
       <ToastHost />
     </div>
     </SearchProvider>
