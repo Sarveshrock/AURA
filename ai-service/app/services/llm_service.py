@@ -87,7 +87,7 @@ class _OpenAICompatibleProvider(LLMProvider):
         if resp is None or resp.status_code >= 500 or resp.status_code == 429:
             raise LLMServiceError(f"{self.label} is temporarily unavailable ({last_error})")
         if resp.status_code >= 400:
-            raise LLMServiceError(f"{self.label} request failed ({resp.status_code}): {resp.text}")
+            raise LLMServiceError(f"{self.label} request failed ({resp.status_code}): {resp.text[:300]}")
 
         data = resp.json()
         try:
@@ -149,7 +149,28 @@ class LLMService:
 
     async def chat(self, messages: list[dict[str, str]], *, max_tokens: int | None = None, model: str | None = None,
                    timeout: float = 60, retries: int = 3) -> str:
-        return await self._provider.chat(messages, max_tokens=max_tokens, model=model, timeout=timeout, retries=retries)
+        return await self._with_fallback(messages, max_tokens=max_tokens, model=model, timeout=timeout,
+                                         retries=retries)
+
+    async def _with_fallback(self, messages: list[dict[str, str]], *, json_mode: bool = False,
+                             max_tokens: int | None = None, model: str | None = None, timeout: float = 60,
+                             retries: int = 3) -> str:
+        """The requested (or main) model first; if it fails (hosted models get retired or overloaded without
+        notice), each backup model in turn. Raises the last error when none answers."""
+        # the backup ids are NVIDIA models; other providers (Grok, OpenRouter) just use their own model
+        backups = ([m.strip() for m in settings.llm_fallback_models.split(",") if m.strip()]
+                   if settings.llm_provider == "nvidia" else [])
+        primary = model or getattr(self._provider, "model", None)
+        max_tokens = max_tokens or settings.llm_default_max_tokens or None
+        last: LLMServiceError | None = None
+        for i, m in enumerate([model] + [b for b in backups if b != primary]):
+            try:
+                # backups get one attempt each: the primary already used the retries
+                return await self._provider.chat(messages, json_mode=json_mode, max_tokens=max_tokens, model=m,
+                                                 timeout=timeout, retries=retries if i == 0 else 1)
+            except LLMServiceError as exc:
+                last = exc
+        raise last or LLMServiceError("No LLM model is configured.")
 
     async def chat_json(self, messages: list[dict[str, str]], *, max_tokens: int | None = None, model: str | None = None,
                         timeout: float = 60, retries: int = 3) -> dict[str, Any]:
@@ -158,8 +179,8 @@ class LLMService:
             "role": "system",
             "content": "Respond with ONLY a single valid JSON object. No markdown, no commentary.",
         }
-        raw = await self._provider.chat([json_instruction, *messages], json_mode=True, max_tokens=max_tokens, model=model,
-                                        timeout=timeout, retries=retries)
+        raw = await self._with_fallback([json_instruction, *messages], json_mode=True, max_tokens=max_tokens,
+                                        model=model, timeout=timeout, retries=retries)
         candidate = _extract_json_object(raw)
         try:
             return json.loads(candidate)

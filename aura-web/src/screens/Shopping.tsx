@@ -2,15 +2,18 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { CheckCircle2, ArrowRight, ChevronRight, ChevronLeft, ShoppingCart, Mic, Store, ShieldCheck, ExternalLink, Search, BarChart3, CalendarDays, Zap, Sparkles } from 'lucide-react';
 import { Hud, PageHero, NeonButton, Toggle, FuturisticModal, SyncStatus, toast, toneHex } from '../components/aura';
-import { AICommandPanel, confirmActions, type AIReply } from '../components/ai';
+import { AICommandPanel, confirmActions, type AIAction, type AIReply } from '../components/ai';
 import { ProductCard, CartLine, money } from '../components/shopping';
 import { categories, categoryQuery, type Product, type CartLine as CartItem, type ProductCategory, type Subscription } from '../data/products';
 import { cartStore, wishlistStore, subscriptionsStore, shoppingFeedbackStore, orderPrefsStore } from '../state/stores';
 import { uid } from '../state/store';
-import { searchProducts, rankSuggestions, logShoppingEvents, getShoppingForecast, type ShoppingForecast } from '../services/shopping';
+import {
+  searchProducts, rankSuggestions, logShoppingEvents, getShoppingForecast, shopAssist, getShoppingPolicy, saveShoppingPolicy,
+  type ShoppingForecast, type AssistReply, type ShoppingPolicy,
+} from '../services/shopping';
 import { extensionStore, quickCartStore, startQuickCart, parseShoppingList, cartAgentAnyStore, KNOWN_STORES, openAccessibilitySettings, retryPendingCart, syncAllStoreHistories } from '../services/extension';
 import { aura } from '../services/aura';
-import { startOrder } from '../services/orderFlow';
+import { orderDestination, startOrder } from '../services/orderFlow';
 
 const FREQUENCIES = [['Every month', 1], ['Every 2 months', 2], ['Every 3 months', 3]] as const;
 const nextOn = (months: number) => { const d = new Date(); d.setMonth(d.getMonth() + months); return d.toISOString().slice(0, 10); };
@@ -110,14 +113,36 @@ export default function Shopping() {
     cheapestOffers: results.slice(0, 10).map((r) => ({ name: r.name, price: r.price, store: r.provider })),
     cart: lines.map((l) => ({ name: l.name, qty: l.qty, price: l.price, store: l.provider })),
   });
+  /** A turn with the shopping assistant as a panel reply: its question, with the options as one-tap answers. */
+  const assistReply = (r: AssistReply): AIReply => {
+    if (r.cartOrder?.items?.length) void startQuickCart({ ...r.cartOrder });
+    return {
+      text: r.say ?? '',
+      actions: r.pending ? (r.quickReplies ?? []).map<AIAction>((label) => ({
+        label, variant: /^no$/i.test(label) ? 'default' : 'primary',
+        run: async () => assistReply(await shopAssist(label)),
+      })) : undefined,
+    };
+  };
   const ai = async (p: string): Promise<AIReply> => {
-    // Groceries / food / medicine: understand it here (which milk? which app?) and hand the clarified order to the cart agent.
-    const order = startOrder(p, (path) => nav(path));
-    if (order) return order;
-    // Price comparison stays on this page; every other command (order X from Y, get my usual, what do I
-    // need...) goes to the Shopping Agent, which learns from it and, for orders, fills the cart by itself.
+    // Medicines go to the pharmacy flow.
+    if (orderDestination(p) === '/wellness?tab=Medicines') {
+      const med = startOrder(p, (path) => nav(path));
+      if (med) return med;
+    }
+    // Price comparison stays on this page.
     const m = p.match(/^(?:find|search(?: for)?|compare|show me)\s+(.+)/i);
     if (!m) {
+      // Orders, and answers to what the assistant just asked ("Zepto", "the cheaper one", "yes"): the server's
+      // decision engine understands the request against your history, shows the real options, and asks before
+      // a new purchase. If it can't be reached, fall back to the simple on-device flow.
+      try {
+        const r = await shopAssist(p);
+        if (r.handled) return assistReply(r);
+      } catch {
+        const local = startOrder(p, (path) => nav(path));
+        if (local) return local;
+      }
       const reply = await aura.chat(`[shopping] ${p}`, context());
       return { text: reply.text };
     }
@@ -237,6 +262,8 @@ export default function Shopping() {
         <QuickCartPanel />
 
         <ForecastPanel />
+
+        <RulesPanel />
 
         {byStore.length > 1 && (
           <Hud corners title={<span className="row" style={{ gap: 8 }}><BarChart3 size={18} className="c-cyan" /> Cheapest by store</span>}>
@@ -401,6 +428,72 @@ function ForecastPanel() {
           Fill {b.store} cart ({b.items.length}) · ~{money(b.estimatedAmountInr, 'INR')}
         </NeonButton>
       ))}
+    </Hud>
+  );
+}
+
+/**
+ * The user's purchase rules: what AURA must ask about and what it may add to a cart by itself. AURA never acts
+ * outside these (and never pays).
+ */
+function RulesPanel() {
+  const [policy, setPolicy] = useState<ShoppingPolicy | null>(null);
+  const [error, setError] = useState('');
+  const [rule, setRule] = useState({ item: '', provider: '', max_price: '', max_qty: '2' });
+
+  useEffect(() => {
+    let live = true;
+    getShoppingPolicy().then((p) => { if (live) setPolicy(p); }).catch((e: unknown) => { if (live) setError(e instanceof Error ? e.message : 'Unavailable'); });
+    return () => { live = false; };
+  }, []);
+
+  const save = (next: ShoppingPolicy) => {
+    setPolicy(next);
+    saveShoppingPolicy(next).then(setPolicy).catch(() => toast('Could not save your shopping rules.'));
+  };
+  const addRule = () => {
+    if (!policy || !rule.item.trim()) { toast('Name the item, e.g. milk.'); return; }
+    save({ ...policy, auto_order_rules: [...policy.auto_order_rules, {
+      item: rule.item.trim().toLowerCase(), provider: rule.provider.trim() || null,
+      max_price: rule.max_price ? Number(rule.max_price) : null, max_qty: Math.max(1, Number(rule.max_qty) || 1),
+    }] });
+    setRule({ item: '', provider: '', max_price: '', max_qty: '2' });
+  };
+
+  return (
+    <Hud corners title={<span className="row" style={{ gap: 8 }}><ShieldCheck size={18} className="c-cyan" /> Shopping rules</span>}>
+      {error && <div className="empty">{/bearer|401/i.test(error) ? 'Sign in to set your rules.' : error}</div>}
+      {!error && !policy && <div className="empty"><span className="spinner" /> Loading…</div>}
+      {policy && (
+        <div className="list" style={{ fontSize: 13 }}>
+          <div className="li"><span className="grow">Ask before a product I haven't bought before</span>
+            <Toggle on={policy.require_confirmation_for_new_product} label="Confirm new products" onChange={(v) => save({ ...policy, require_confirmation_for_new_product: v })} /></div>
+          <div className="li"><span className="grow">Always ask above (₹)</span>
+            <input className="select" type="number" min={0} style={{ width: 90 }} aria-label="Confirm above amount" defaultValue={policy.require_confirmation_above}
+              onBlur={(e) => save({ ...policy, require_confirmation_above: Math.max(0, Number(e.target.value) || 0) })} /></div>
+          <div className="li"><span className="grow">Ask if the price is this % above my usual</span>
+            <input className="select" type="number" min={0} style={{ width: 90 }} aria-label="Price jump percent" defaultValue={policy.max_price_deviation_percent}
+              onBlur={(e) => save({ ...policy, max_price_deviation_percent: Math.max(0, Number(e.target.value) || 0) })} /></div>
+          <div className="li"><span className="grow">Allow automatic repeat orders (only the rules below)</span>
+            <Toggle on={policy.allow_auto_repeat_orders} label="Automatic repeat orders" onChange={(v) => save({ ...policy, allow_auto_repeat_orders: v })} /></div>
+          {policy.auto_order_rules.map((r, i) => (
+            <div key={`${r.item}-${i}`} className="li t-sub" style={{ fontSize: 12.5 }}>
+              <span className="grow">{r.item}{r.provider ? ` from ${r.provider}` : ''}{r.max_price ? ` up to ₹${r.max_price}` : ''}, max ×{r.max_qty}</span>
+              <button className="link c-blue" style={{ background: 'none', border: 0 }} onClick={() => save({ ...policy, auto_order_rules: policy.auto_order_rules.filter((_, j) => j !== i) })}>Remove</button>
+            </div>
+          ))}
+          {policy.allow_auto_repeat_orders && (
+            <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
+              <input className="select" style={{ flex: 2, minWidth: 80 }} placeholder="item (milk)" value={rule.item} onChange={(e) => setRule({ ...rule, item: e.target.value })} aria-label="Item" />
+              <input className="select" style={{ flex: 2, minWidth: 80 }} list="aura-stores" placeholder="store" value={rule.provider} onChange={(e) => setRule({ ...rule, provider: e.target.value })} aria-label="Store" />
+              <input className="select" style={{ flex: 1, minWidth: 60 }} type="number" placeholder="max ₹" value={rule.max_price} onChange={(e) => setRule({ ...rule, max_price: e.target.value })} aria-label="Max price" />
+              <input className="select" style={{ flex: 1, minWidth: 50 }} type="number" min={1} placeholder="qty" value={rule.max_qty} onChange={(e) => setRule({ ...rule, max_qty: e.target.value })} aria-label="Max quantity" />
+              <NeonButton onClick={addRule}>Add rule</NeonButton>
+            </div>
+          )}
+          <p className="t-sub" style={{ fontSize: 11.5, marginTop: 8 }}>AURA fills the cart and stops. It never pays, and never orders outside these rules.</p>
+        </div>
+      )}
     </Hud>
   );
 }

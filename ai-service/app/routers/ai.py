@@ -40,6 +40,13 @@ async def chat(req: ChatRequest):
     agent_results = await coordinator.consult(req.message, {"userId": req.userId})
     agents_consulted = [r.agent for r in agent_results]
 
+    # The shopping agent's questions and confirmations are precise (stores, prices, where the numbers came from):
+    # they go out verbatim, not paraphrased by the chat model.
+    direct = next((r.data.get("directReply") for r in agent_results if r.agent == "shopping" and r.data.get("directReply")), None)
+    if direct:
+        return ChatResponse(reply=direct, agentsConsulted=agents_consulted,
+                            agentData={r.agent: r.data for r in agent_results if r.data})
+
     context_summary = _agent_notes(agent_results)
     try:
         reply = await llm_service.chat(

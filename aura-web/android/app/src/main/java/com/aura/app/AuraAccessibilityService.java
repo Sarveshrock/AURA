@@ -122,6 +122,237 @@ public class AuraAccessibilityService extends AccessibilityService implements Ca
         return enabled != null && enabled.toLowerCase().contains(me.toLowerCase());
     }
 
+    /** Every window of `pkg` on screen, top first (for the assistant's app adapters). */
+    List<AccessibilityNodeInfo> roots(String pkg) {
+        try {
+            return appRoots(pkg);
+        } catch (Exception e) {
+            return new java.util.ArrayList<>();
+        }
+    }
+
+    /** Debug builds only: the assistant's adapters log what they find on screen. */
+    static boolean debuggable() {
+        AuraAccessibilityService s = instance;
+        return s != null && (s.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+
+    /** Presses the phone's own Home or Back button (GLOBAL_ACTION_HOME / GLOBAL_ACTION_BACK). */
+    boolean pressSystem(int globalAction) {
+        return performGlobalAction(globalAction);
+    }
+
+    /** What the user is looking at: the top app's package and window title. Changes when the screen changes. */
+    String screenSignature() {
+        try {
+            android.view.accessibility.AccessibilityWindowInfo top = null;
+            for (android.view.accessibility.AccessibilityWindowInfo w : getWindows()) {
+                if (w.getType() != android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+                if (top == null || w.getLayer() > top.getLayer()) top = w;
+            }
+            if (top == null) return null;
+            AccessibilityNodeInfo root = top.getRoot();
+            CharSequence title = android.os.Build.VERSION.SDK_INT >= 24 ? top.getTitle() : null;
+            return (root == null ? "?" : root.getPackageName()) + "|" + title + "|" + top.getId();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** The package of the app the user is looking at (topmost app window), or null if it can't be read. */
+    String foregroundPackage() {
+        try {
+            android.view.accessibility.AccessibilityWindowInfo top = null;
+            for (android.view.accessibility.AccessibilityWindowInfo w : getWindows()) {
+                if (w.getType() != android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+                if (top == null || w.getLayer() > top.getLayer()) top = w;
+            }
+            AccessibilityNodeInfo root = top != null ? top.getRoot() : getRootInActiveWindow();
+            return root != null && root.getPackageName() != null ? root.getPackageName().toString() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Selects the first result on `pkg`'s screen whose text has every word of `query` (a song or video in a list of
+     * search results). The item is found by its text and activated through its own click action. Returns the
+     * item's title, or null when nothing on screen matches. Ads and anything payment-like are never selected, nor
+     * is the search box (it shows exactly `searched`).
+     */
+    String selectFirstMatch(String pkg, String query, String searched) {
+        try {
+            String q = query.toLowerCase(java.util.Locale.ROOT).trim();
+            for (AccessibilityNodeInfo root : appRoots(pkg)) {
+                AccessibilityNodeInfo hit = firstMatch(root, searched.toLowerCase(java.util.Locale.ROOT).trim(), q.split(" "), 0);
+                if (hit == null) continue;
+                List<String> texts = new java.util.ArrayList<>();
+                collectText(hit, texts, 0);
+                if (!hit.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return null;
+                // the row's name: its first text that has a word asked for (a row can start with a "Playing" badge)
+                String title = texts.get(0);
+                for (String t : texts) {
+                    if (t.toLowerCase(java.util.Locale.ROOT).contains(q.split(" ")[0])) { title = t; break; }
+                }
+                return title.length() > 60 ? title.substring(0, 60).trim() : title;
+            }
+        } catch (Exception e) {
+            // the screen changed while it was being read
+        }
+        return null;
+    }
+
+    private AccessibilityNodeInfo firstMatch(AccessibilityNodeInfo n, String query, String[] words, int depth) {
+        if (n == null || depth > 50) return null;
+        if (n.isClickable() && n.isVisibleToUser() && !n.isEditable()) {
+            List<String> texts = new java.util.ArrayList<>();
+            collectText(n, texts, 0);
+            String all = String.join(" ", texts).toLowerCase(java.util.Locale.ROOT);
+            boolean hasAll = !texts.isEmpty();
+            for (String w : words) hasAll = hasAll && all.contains(w);
+            // one result row, not a whole list (few texts), not the search box (which shows just the query), not an ad
+            if (hasAll && texts.size() <= 12 && !all.trim().equals(query) && !all.trim().equals(String.join(" ", words))
+                    && !all.matches(".*\\b(sponsored|ad)\\b.*") && !FORBIDDEN.matcher(all).find()) return n;
+        }
+        for (int i = 0; i < n.getChildCount(); i++) {
+            AccessibilityNodeInfo hit = firstMatch(n.getChild(i), query, words, depth + 1);
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
+    private void collectText(AccessibilityNodeInfo n, List<String> out, int depth) {
+        if (n == null || depth > 12 || out.size() > 12) return;
+        CharSequence t = n.getText() != null && n.getText().length() > 0 ? n.getText() : n.getContentDescription();
+        if (t != null && t.toString().trim().length() > 0) out.add(t.toString().trim());
+        for (int i = 0; i < n.getChildCount(); i++) collectText(n.getChild(i), out, depth + 1);
+    }
+
+    // ------------------------------------------------------------------ reading other apps for the assistant
+    // Used by the assistant's agents (YouTube, WhatsApp). Items are found by their text or label and activated
+    // through their own click action; nothing here uses screen coordinates, and nothing read is stored or sent.
+
+    private static final Pattern VIDEO_ROW = Pattern.compile("\\b(?:views?|watching|play video)\\b");
+    private static final Pattern NOT_A_VIDEO = Pattern.compile("\\b(?:subscribers?|shorts|playlist|sponsored|ad)\\b");
+
+    /** The titles of the videos listed on `pkg`'s screen, top first (channels, playlists, Shorts and ads left out). */
+    List<String> videoResults(String pkg, int max) {
+        List<String> titles = new java.util.ArrayList<>();
+        try {
+            for (AccessibilityNodeInfo root : appRoots(pkg)) videoRows(root, null, titles, 0);
+        } catch (Exception e) {
+            // the screen changed while it was being read
+        }
+        return titles.size() > max ? new java.util.ArrayList<>(titles.subList(0, max)) : titles;
+    }
+
+    /** Opens the listed video with exactly this title. False when it isn't on screen. */
+    boolean selectVideo(String pkg, String title) {
+        try {
+            for (AccessibilityNodeInfo root : appRoots(pkg)) {
+                List<AccessibilityNodeInfo> rows = new java.util.ArrayList<>();
+                List<String> titles = new java.util.ArrayList<>();
+                videoRows(root, rows, titles, 0);
+                int i = titles.indexOf(title);
+                if (i >= 0) return rows.get(i).performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            }
+        } catch (Exception e) {
+            // the screen changed while it was being read
+        }
+        return false;
+    }
+
+    private void videoRows(AccessibilityNodeInfo n, List<AccessibilityNodeInfo> rows, List<String> titles, int depth) {
+        if (n == null || depth > 50 || titles.size() >= 10) return;
+        if (n.isClickable() && n.isVisibleToUser()) {
+            List<String> texts = new java.util.ArrayList<>();
+            collectText(n, texts, 0);
+            String all = String.join(" ", texts).toLowerCase(java.util.Locale.ROOT);
+            if (!texts.isEmpty() && texts.size() <= 14 && VIDEO_ROW.matcher(all).find() && !NOT_A_VIDEO.matcher(all).find()) {
+                // a row's label reads "Title - 12 minutes - Go to channel - ..."; the title is the part before that
+                String title = texts.get(0).split(" - \\d+ (?:hours?|minutes?|seconds?)")[0].split(" - Go to channel")[0].trim();
+                if (title.length() > 100) title = title.substring(0, 100).trim();
+                if (!title.isEmpty() && !titles.contains(title)) {
+                    titles.add(title);
+                    if (rows != null) rows.add(n);
+                }
+                return;
+            }
+        }
+        for (int i = 0; i < n.getChildCount(); i++) videoRows(n.getChild(i), rows, titles, depth + 1);
+    }
+
+    /** Whether `pkg`'s screen shows this text anywhere (a chat's header showing the contact's name, say). */
+    boolean hasText(String pkg, String text) {
+        try {
+            String needle = text.toLowerCase(java.util.Locale.ROOT).trim();
+            for (AccessibilityNodeInfo root : appRoots(pkg)) if (containsText(root, needle, 0)) return true;
+        } catch (Exception e) {
+            // the screen changed while it was being read
+        }
+        return false;
+    }
+
+    private boolean containsText(AccessibilityNodeInfo n, String needle, int depth) {
+        if (n == null || depth > 50) return false;
+        CharSequence t = n.getText() != null && n.getText().length() > 0 ? n.getText() : n.getContentDescription();
+        if (t != null && t.toString().toLowerCase(java.util.Locale.ROOT).contains(needle)) return true;
+        for (int i = 0; i < n.getChildCount(); i++) if (containsText(n.getChild(i), needle, depth + 1)) return true;
+        return false;
+    }
+
+    /** What is typed in `pkg`'s text box ("" when it is empty). Null when there is no text box on screen. */
+    String inputText(String pkg) {
+        try {
+            for (AccessibilityNodeInfo root : appRoots(pkg)) {
+                AccessibilityNodeInfo box = firstEditable(root, 0);
+                if (box == null) continue;
+                if (box.isPassword()) return null;
+                if (android.os.Build.VERSION.SDK_INT >= 26 && box.isShowingHintText()) return "";
+                return box.getText() == null ? "" : box.getText().toString();
+            }
+        } catch (Exception e) {
+            // the screen changed while it was being read
+        }
+        return null;
+    }
+
+    private AccessibilityNodeInfo firstEditable(AccessibilityNodeInfo n, int depth) {
+        if (n == null || depth > 50) return null;
+        if (n.isEditable() && n.isVisibleToUser()) return n;
+        for (int i = 0; i < n.getChildCount(); i++) {
+            AccessibilityNodeInfo hit = firstEditable(n.getChild(i), depth + 1);
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
+    /** Presses the button in `pkg` whose own label matches (WhatsApp's "Send", YouTube's "Skip ad"). False if there is none. */
+    boolean clickLabelled(String pkg, Pattern label) {
+        try {
+            for (AccessibilityNodeInfo root : appRoots(pkg)) {
+                AccessibilityNodeInfo button = firstLabelled(root, label, 0);
+                if (button != null) return button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            }
+        } catch (Exception e) {
+            // the screen changed while it was being read
+        }
+        return false;
+    }
+
+    private AccessibilityNodeInfo firstLabelled(AccessibilityNodeInfo n, Pattern label, int depth) {
+        if (n == null || depth > 50) return null;
+        if (n.isClickable() && n.isVisibleToUser() && n.isEnabled()) {
+            CharSequence t = n.getText() != null && n.getText().length() > 0 ? n.getText() : n.getContentDescription();
+            if (t != null && label.matcher(t.toString().trim()).find() && !FORBIDDEN.matcher(t).find()) return n;
+        }
+        for (int i = 0; i < n.getChildCount(); i++) {
+            AccessibilityNodeInfo hit = firstLabelled(n.getChild(i), label, depth + 1);
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
     // ------------------------------------------------------------------ job control
     /** Starts the active CartJobBridge job (mode "app") in the store's app. Called from the plugin. */
     void startJob() {

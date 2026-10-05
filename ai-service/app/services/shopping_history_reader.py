@@ -33,7 +33,8 @@ the card/section around them.
 
 Return JSON only:
 {{"action": "click"|"scroll"|"back"|"wait"|"history_done", "elementId": id for click or null, "reason": short why,
-  "orders": [{{"id": order number if shown or null, "date": "YYYY-MM-DD",
+  "orders": [{{"id": order number if shown or null, "date": "YYYY-MM-DD" (the order/delivery date shown; null if
+              no date is visible for that order - never guess),
               "items": [{{"name": full product name with brand and size, "qty": integer,
                           "price": total paid for that line (qty x unit price), number or null}}]}}]}}
 
@@ -69,7 +70,7 @@ async def history_step(req: sb.StepRequest) -> sb.StepAction:
                                     app_hint=sb.STORES.get(key or "", {}).get("historyHint") or "")
     messages = [{"role": "system", "content": system}, {"role": "user", "content": sb._page_text(req)}]
     raw = None
-    for model, timeout in ((settings.shopping_agent_model or None, settings.shopping_agent_timeout_s + 10),
+    for model, timeout in ((settings.cart_agent_model, settings.shopping_agent_timeout_s + 10),
                            (None, settings.shopping_agent_timeout_s + 20)):
         try:
             raw = await llm_service.chat_json(messages, model=model, timeout=timeout, retries=1)
@@ -147,16 +148,18 @@ async def _finish_history(req: sb.StepRequest, reason: str, saved: int = 0) -> s
 
 async def resolve_step(req: sb.StepRequest) -> sb.StepAction:
     """First cart step: swap generic items for the user's usual products (from history incl. what was just read)."""
-    items = [{"name": it.name, "qty": it.qty} for it in req.items]
+    items = [{"name": it.name, "qty": it.qty, **({"hint": it.hint} if it.hint else {})} for it in req.items]
     notes: list[str] = []
     if req.userId and req.userId != "anonymous":
         try:
             profile = product_profile(await shopping_history.get_events(req.userId), store=req.store)
-            items, notes = resolve_items(items, profile)
+            items, notes = resolve_items(items, profile, store=req.store)
             notes += [f"{i['name']}: not in your past orders, picking a good match" for i in items
                       if not i.get("fromHistory")]
         except ShoppingHistoryError as exc:
             logger.warning("resolve_history_unavailable", error=str(exc)[:200])
-    return sb.StepAction(action="set_items", items=[{"name": i["name"], "qty": i["qty"]} for i in items],
+    return sb.StepAction(action="set_items",
+                         items=[{"name": i["name"], "qty": i["qty"], **({"hint": i["hint"]} if i.get("hint") else {})}
+                                for i in items],
                          reason="; ".join(notes) if notes else "items as you said them",
                          source="fast")

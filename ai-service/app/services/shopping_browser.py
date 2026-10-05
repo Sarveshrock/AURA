@@ -26,7 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
-from app.ml.shopping_catalog import CATALOG, canonical_app, canonical_item
+from app.ml.shopping_catalog import CATALOG, FOOD_APPS, canonical_app, canonical_item, dish_item
 from app.services.llm_service import LLMServiceError, llm_service
 
 logger = structlog.get_logger()
@@ -63,6 +63,12 @@ STORES: dict[str, dict] = {
             "package": "com.aranoah.healthkart.plus", "appLabel": "Tata 1mg"},
     "pharmeasy": {"name": "PharmEasy", "home": "https://pharmeasy.in/", "search": "https://pharmeasy.in/search/all?name={q}"},
     "croma": {"name": "Croma", "home": "https://www.croma.com/", "search": "https://www.croma.com/searchB?q={q}"},
+    "zomato": {"name": "Zomato", "home": "https://www.zomato.com/", "search": "https://www.zomato.com/search?q={q}",
+               "package": "com.application.zomato", "appLabel": "Zomato",
+               "appHint": "Food delivery: search the dish, open the right restaurant (see the item's hint) if the result "
+                          "is a restaurant, then ADD the dish there. If a customisation sheet opens, keep the defaults "
+                          "and confirm with its Add item button.",
+               "historyHint": "Orders are under the profile icon > Your orders."},
     "dmart": {"name": "DMart Ready", "home": "https://www.dmart.in/", "search": "https://www.dmart.in/search?searchTerm={q}"},
 }
 _ALIASES = {"swiggy instamart": "instamart", "swiggy": "instamart", "big basket": "bigbasket", "jio mart": "jiomart",
@@ -130,6 +136,7 @@ class CartItem(BaseModel):
     qty: int = 1
     status: str = "pending"  # pending | added | failed
     note: str | None = None
+    hint: str | None = None  # extra targeting from the user's history, e.g. "from restaurant Biryani Zest"
 
 
 class StepRecord(BaseModel):
@@ -252,7 +259,8 @@ How to work:
 
 
 def _items_text(items: list[CartItem]) -> str:
-    return "\n".join(f"{i}: {it.name} x{it.qty} [{it.status}]" for i, it in enumerate(items))
+    return "\n".join(f"{i}: {it.name} x{it.qty} [{it.status}]{' - ' + it.hint if it.hint else ''}"
+                     for i, it in enumerate(items))
 
 
 def _current(items: list[CartItem]) -> int | None:
@@ -342,9 +350,13 @@ def _product(el: PageElement) -> str:
     return re.sub(r"\s+", " ", text).strip()[:80]
 
 
-def _same_item(product: str, item: CartItem) -> int:
+def _same_item(product: str, item: CartItem, food: bool = False) -> int:
     """How well a product matches the item: 2 = confidently the same thing, 1 = contains its words, 0 = no.
-    Catalog synonyms count (dahi = curd, doodh = milk, maggi = instant noodles)."""
+    Catalog synonyms count (dahi = curd, doodh = milk, maggi = instant noodles). On food-delivery apps the grocery
+    catalog doesn't apply ("aloo paratha" is a dish, not potatoes): the dish's words must all be in the name."""
+    if food:
+        want, got = dish_item(item.name).split(), dish_item(product)
+        return 2 if want and got and all(w in got for w in want) else 0
     words = _words(item.name)
     want = canonical_item(item.name)
     if not product:
@@ -371,10 +383,15 @@ def _best_add(req: StepRequest, item: CartItem) -> PageElement | None:
     Milk 500 ml"), so a product whose last word is the item's last word beats one that merely contains it
     ("Milk Bikis Biscuits"). Ties keep the store's own ranking (first listed)."""
     best, best_score = None, 0
+    food = canonical_app(req.store) in FOOD_APPS
+    restaurant = (item.hint or "").lower().replace("from restaurant", "").strip()
     for el in req.elements:
         if not _is_add(el) or el.disabled:
             continue
-        score = _same_item(_product(el), item)
+        score = _same_item(_product(el), item, food)
+        if score and food and restaurant:
+            # the same dish name exists at many restaurants: only the user's restaurant is a confident match
+            score = 3 if restaurant in f"{el.context or ''} {req.pageText}".lower() else 1
         if score > best_score:
             best, best_score = el, score
     # a single generic word that only appears mid-name ("milk" in "Milk Bikis") is the LLM's call
@@ -490,7 +507,9 @@ def fast_step(req: StepRequest) -> StepAction | None:
                           reason=f"add {_product(add)[:50]}", source="fast")
 
     # 3. get to the search results for this item
-    typed_now = last is not None and last.action == "type" and (last.target or "") == f"search@{item.name}"
+    # Typed this search within the last few steps: don't type it again (some apps don't expose the box's text, and
+    # retyping wipes the results/suggestions that are loading). What to do with the results is the LLM's call.
+    typed_now = any(h.action == "type" and (h.target or "") == f"search@{item.name}" for h in req.history[-6:])
     if req.mode == "app":
         box = next((e for e in req.elements if e.editable and not e.disabled), None)
         box_text = (box.text or "").lower() if box else ""
@@ -539,7 +558,7 @@ def _normalise_id(action: StepAction, req: StepRequest) -> None:
 async def _ask_llm(req: StepRequest, system: str) -> StepAction:
     """Fast model first (short timeout), then the main model, then the no-LLM heuristic."""
     messages = [{"role": "system", "content": system}, {"role": "user", "content": _page_text(req)}]
-    for model, timeout in ((settings.shopping_agent_model or None, settings.shopping_agent_timeout_s),
+    for model, timeout in ((settings.cart_agent_model, settings.shopping_agent_timeout_s),
                            (None, settings.shopping_agent_timeout_s + 10)):
         try:
             raw = await llm_service.chat_json(messages, model=model, timeout=timeout, retries=1)

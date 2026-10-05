@@ -30,6 +30,7 @@ class ShoppingHistoryStore:
     def __init__(self) -> None:
         self._demo: dict[str, pd.DataFrame] | None = None
         self._memory: dict[str, list[dict]] = defaultdict(list)
+        self._docs: dict[tuple[str, str, str], dict] = {}
 
     def _demo_events(self) -> dict[str, pd.DataFrame]:
         if self._demo is None:
@@ -111,6 +112,33 @@ class ShoppingHistoryStore:
             return "supabase"
         self._memory[user_id] += events
         return "memory"
+
+    # ---- single documents (the user's shopping rules) ----
+    async def get_doc(self, user_id: str, collection: str, doc_id: str) -> dict | None:
+        if self._use_supabase(user_id):
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"{settings.supabase_url}/rest/v1/app_records", headers=self._headers(),
+                    params={"select": "data", "user_id": f"eq.{user_id}", "collection": f"eq.{collection}",
+                            "id": f"eq.{doc_id}"})
+            if resp.status_code >= 400:
+                raise ShoppingHistoryError(f"Supabase read failed ({resp.status_code}): {resp.text[:200]}")
+            rows = resp.json()
+            return rows[0]["data"] if rows else None
+        return self._docs.get((user_id, collection, doc_id))
+
+    async def set_doc(self, user_id: str, collection: str, doc_id: str, data: dict) -> None:
+        if self._use_supabase(user_id):
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    f"{settings.supabase_url}/rest/v1/app_records",
+                    headers={**self._headers(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+                    params={"on_conflict": "user_id,collection,id"},
+                    json={"user_id": user_id, "collection": collection, "id": doc_id, "data": data})
+            if resp.status_code >= 400:
+                raise ShoppingHistoryError(f"Supabase write failed ({resp.status_code}): {resp.text[:200]}")
+            return
+        self._docs[(user_id, collection, doc_id)] = data
 
     def clear_memory(self, user_id: str) -> int:
         return len(self._memory.pop(user_id, []))

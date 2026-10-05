@@ -17,6 +17,7 @@ from app.ml.shopping_predictor import get_predictor, retrain_scheduler
 from app.services import shopping_browser as sb
 from app.services.llm_service import LLMServiceError
 from app.services.shopping_history import shopping_history
+from app.shopping.session import sessions
 
 DEMO = "USER_000001"  # bachelor, buys mostly on Swiggy Instamart
 AS_OF = "2026-10-01T09:00:00"
@@ -26,6 +27,8 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     shopping_history.clear_memory(DEMO)
+    sessions.clear(DEMO)
+    sessions.clear("11111111-2222-3333-4444-555555555555")
     retrain_scheduler.reasons = []
     # commands schedule a retrain; tests run it explicitly instead of waiting on a timer
     monkeypatch.setattr(retrain_scheduler, "request", lambda reason: {"scheduled": True, "reason": reason})
@@ -113,12 +116,15 @@ def test_order_command_builds_a_cart_job_and_logs_it(monkeypatch):
                        "items": [{"name": "Amul milk 1L", "qty": 2}, {"name": "eggs", "qty": 1}]})
     r = client.post("/ai/shopping/ask", json={"userId": DEMO, "message": "order 2 amul milk and eggs from zepto",
                                                "asOf": AS_OF}).json()
+    assert "cartOrder" not in r["data"] and r["data"]["assist"]["pending"]      # eggs are new for this user: ask
+    assert "haven't bought" in r["data"]["assist"]["say"]
+    r = client.post("/ai/shopping/ask", json={"userId": DEMO, "message": "yes", "asOf": AS_OF}).json()
     job = r["data"]["cartOrder"]
     assert job["store"] == "Zepto" and job["startUrl"].startswith("https://www.zeptonow.com")
     assert job["items"] == [{"name": "Amul milk 1L", "qty": 2}, {"name": "eggs", "qty": 1}]
     assert r["data"]["retrain"]["scheduled"]
     logged = asyncio.run(shopping_history.get_events(DEMO))[-2:]
-    assert [e["item"] for e in logged] == ["milk", "eggs"]
+    assert [canonical_item(e["name"]) for e in logged] == ["milk", "eggs"]
     # a command is intent, not a purchase: what lands in the cart is logged as an order when the job ends
     assert all(e["action"] == "add_to_cart" and e["source"] == "agent_command" and e["app"] == "Zepto" for e in logged)
     assert job["syncHistory"] is True and job["resolved"] is False  # Zepto history never read: read it first
@@ -127,15 +133,19 @@ def test_order_command_builds_a_cart_job_and_logs_it(monkeypatch):
 def test_usual_order_without_store_uses_model(monkeypatch):
     _llm(monkeypatch, LLMServiceError("down"))  # also exercises the offline fallback parser
     r = client.post("/ai/shopping/ask", json={"userId": DEMO, "message": "get my usual groceries", "asOf": AS_OF}).json()
+    a = r["data"]["assist"]
+    assert a["pending"] and a["question"] == "confirm" and "Swiggy Instamart" in a["say"]  # one yes, not a quiz
+    r = client.post("/ai/shopping/ask", json={"userId": DEMO, "message": "haan kar do", "asOf": AS_OF}).json()
     job = r["data"]["cartOrder"]
     assert job["store"] == "Swiggy Instamart"  # where this user buys these
     assert {"milk", "bread"} <= {i["name"] for i in job["items"]}
-    assert any("predicted basket" in n for n in r["insights"])
 
 
 def test_any_store_is_accepted(monkeypatch):
     _llm(monkeypatch, {"intent": "order", "store": "Lulu Hypermarket", "items": [{"name": "rice 5kg", "qty": 1}]})
-    job = client.post("/ai/shopping/ask", json={"userId": DEMO, "message": "order rice from lulu"}).json()["data"]["cartOrder"]
+    first = client.post("/ai/shopping/ask", json={"userId": DEMO, "message": "order rice from lulu"}).json()["data"]
+    assert "cartOrder" not in first and first["assist"]["question"] == "confirm"
+    job = client.post("/ai/shopping/ask", json={"userId": DEMO, "message": "yes"}).json()["data"]["cartOrder"]
     assert job["store"] == "Lulu Hypermarket" and job["storeKey"] is None
     assert job["startUrl"].startswith("https://www.google.com/search?q=Lulu+Hypermarket")
 
@@ -428,8 +438,17 @@ def memory_store(monkeypatch):
     async def add_events(uid, evs):
         store.setdefault(uid, []).extend(evs)
         return "memory"
+    docs: dict[tuple, dict] = {}
+
+    async def get_doc(uid, collection, doc_id):
+        return docs.get((uid, collection, doc_id))
+
+    async def set_doc(uid, collection, doc_id, data):
+        docs[(uid, collection, doc_id)] = data
     monkeypatch.setattr(shopping_history, "get_events", get_events)
     monkeypatch.setattr(shopping_history, "add_events", add_events)
+    monkeypatch.setattr(shopping_history, "get_doc", get_doc)
+    monkeypatch.setattr(shopping_history, "set_doc", set_doc)
     return store
 
 
@@ -500,7 +519,8 @@ def test_command_relates_to_history(monkeypatch, memory_store):
 def test_repeated_test_commands_count_once():
     ev = [{"timestamp": f"2026-10-01T21:{m:02d}", "action": "order", "name": "milk", "source": "agent_command"}
           for m in (0, 10, 39, 52)]
-    assert len(normalize_events(ev)) == 1
+    out = normalize_events(ev)
+    assert (out["action"] == "order").sum() == 0  # commands are intent (cart adds), never purchases
 
 
 @pytest.mark.parametrize("raw,expected", [("Yesterday", "2026-10-01"), ("3 days ago", "2026-09-29"),
@@ -581,3 +601,306 @@ def test_first_sync_does_not_stop_on_repeated_orders(monkeypatch, memory_store):
     req = sb.StepRequest(mode="app", phase="history", store="Amazon", userId=REAL, url="Orders", ordersRead=3,
                          ordersKnown=2, historyLimit=30, elements=[sb.PageElement(id="n1", tag="View", text="Order 4")])
     assert asyncio.run(sb.next_step(req)).action == "click"
+
+
+def test_orders_without_a_date_are_skipped_and_respaced_names_are_duplicates():
+    from datetime import date
+    today = date(2026, 10, 3)
+    first = mem.imported_events([{"id": "#403-1", "date": "2026-09-20", "items": [{"name": "Lay's Magic Masala 48 g", "qty": 1}]},
+                                 {"id": None, "date": None, "items": [{"name": "Amul Milk Gold 1 L", "qty": 1}]}],
+                                "Amazon", [], today)
+    assert [e["name"] for e in first] == ["Lay's Magic Masala 48 g"]          # undated order not invented
+    again = mem.imported_events([{"id": "403-1", "date": "2026-09-21", "items": [{"name": "Lay's Magic Masala 48g", "qty": 1}]}],
+                                "Amazon", first, today)
+    assert again == []                                                         # same order id + same product
+
+
+def test_invoices_are_parsed_locally():
+    from app.services.invoice_parser import order_events, parse_invoice
+    tax = """Tax Invoice
+ORIGINAL FOR RECIPIENT
+Restaurant Name: Pizza Place
+Invoice Date: 03/07/2026
+Customer Name: Someone Private
+Delivery Address: Somewhere Private
+Particulars Gross value Discount Net value CGST (Rate) CGST (INR) SGST (Rate) SGST (INR) Total
+1 x Create Your Flavour Fun
+230 25.30 204.70 2.50% 5.12 2.50% 5.12 214.94
+Combo - Box Of 2 - Veg Pizza
+2 x Garlic Bread 138 38.00 100.00 2.50% 2.50 2.50% 2.50 105.00
+Item(s) Total 368.00 63.30 304.70 7.62 7.62 319.94
+Amount of INR 319.94 settled digitally against Order ID 1234567890 dated 2026-07-03.
+For ETERNAL LIMITED (FORMERLY KNOWN AS ZOMATO LIMITED)"""
+    o = parse_invoice(tax)
+    assert (o["store"], o["orderId"], o["restaurant"], o["timestamp"][:10]) == ("Zomato", "1234567890", "Pizza Place", "2026-07-03")
+    assert [(i["name"], i["qty"], i["price"]) for i in o["items"]] == [
+        ("Create Your Flavour Fun Combo - Box Of 2 - Veg Pizza", 1, 204.7), ("Garlic Bread", 2, 50.0)]
+    assert "Private" not in str(o)                                             # no personal details kept
+    receipt = """Zomato Food Order: Summary and Receipt
+Order ID: 1098765432
+Order Time: 02 October 2026, 10:25 AM
+Customer Name: Someone Private
+Restaurant Name: Spice Kitchen
+Item Quantity Unit Price Total Price
+2 Aloo Paratha with Curd and Pickle 1 ₹139 ₹139
+Soya Chaap Biriyani Bowl 1 229 229
+₹ ₹
+3-month Zomato Gold membership ₹1
+Taxes ₹10.34"""
+    o = parse_invoice(receipt)
+    assert o["timestamp"] == "2026-10-02T10:25:00"
+    assert [i["name"] for i in o["items"]] == ["2 Aloo Paratha with Curd and Pickle", "Soya Chaap Biriyani Bowl"]
+    evs = order_events(o, [])
+    assert evs[0]["category"] == "restaurant_food" and evs[0]["restaurant"] == "Spice Kitchen"
+    assert order_events(o, evs) == []                                          # re-import adds nothing
+    assert parse_invoice("some other document") is None
+
+
+def test_restaurant_dishes_are_not_groceries_and_resolve_with_restaurant():
+    events = [{"timestamp": f"2026-0{m}-{d:02d}T21:00:00", "action": "order", "name": "Soya Chaap Biriyani Bowl",
+               "app": "Zomato", "category": "restaurant_food", "restaurant": "Biryani House", "source": "invoice"}
+              for m, d in ((6, 20), (6, 24), (7, 3), (9, 29))]
+    events.append({"timestamp": "2026-10-01T10:00:00", "action": "order", "name": "2 Aloo Paratha with Curd and Pickle",
+                   "app": "Zomato", "category": "restaurant_food", "restaurant": "Spice Kitchen", "source": "invoice"})
+    ev = normalize_events(events)
+    assert set(ev["item"]) == {"soya chaap biriyani bowl", "2 aloo paratha with curd and pickle"}  # not potatoes/curd
+    items, notes = mem.resolve_items([{"name": "soya chaap biryani", "qty": 1}], mem.product_profile(events), store="zomato")
+    assert items[0]["name"] == "Soya Chaap Biriyani Bowl" and items[0]["hint"] == "from restaurant Biryani House"
+    # on Zomato the same dish at another restaurant is not a confident match; the user's restaurant is
+    req = _req([{"id": "n1", "tag": "ViewGroup", "text": "ADD", "context": "Soya Chaap Biriyani Bowl ₹249 Hyderabad House ADD"},
+                {"id": "n2", "tag": "ViewGroup", "text": "ADD", "context": "Biryani House Soya Chaap Biriyani Bowl ₹229 ADD"}],
+               items=[sb.CartItem(name="Soya Chaap Biriyani Bowl", hint="from restaurant Biryani House")], store="Zomato")
+    req.mode, req.pageText = "app", ""
+    assert sb.fast_step(req).elementId == "n2"
+
+
+@pytest.mark.parametrize("heard,store,package", [
+    ("blink it", "Blinkit", "com.grofers.customerapp"), ("zapdo", "Zepto", "com.zeptoconsumerapp"),
+    ("Zapto", "Zepto", "com.zeptoconsumerapp"), ("the blinkit app", "Blinkit", "com.grofers.customerapp"),
+    ("insta mart", "Swiggy Instamart", "in.swiggy.android"), ("jomato", "Zomato", "com.application.zomato"),
+    ("Lulu Hypermarket", "Lulu Hypermarket", None),
+])
+def test_misheard_store_names_still_open_the_real_app(heard, store, package):
+    """Voice commands write stores as "blink it" / "zapdo"; they must not fall back to a web search."""
+    r = sb.resolve_store(heard)
+    assert (r["name"], r["androidPackage"]) == (store, package)
+
+
+def test_search_is_not_retyped_while_results_load():
+    """Zomato run that looped type -> scroll -> type: after typing, the fast path leaves the next move to the LLM."""
+    item = sb.CartItem(name="Soya Chaap Biriyani Bowl", hint="from restaurant Biryani House")
+    req = _req([{"id": "n1", "tag": "EditText", "editable": True, "text": ""}], items=[item], store="Zomato",
+               history=_hist(("type", "search@Soya Chaap Biriyani Bowl", "typed + enter"), ("scroll", None, "scrolled")))
+    req.mode = "app"
+    assert sb.fast_step(req) is None
+
+
+def test_llm_service_passes_options_through_and_falls_back(monkeypatch):
+    """Exercises the real LLMService wrapper (other tests replace chat_json wholesale)."""
+    from app.core.config import settings
+    from app.services.llm_service import LLMProvider, LLMService
+
+    calls = []
+
+    class Fake(LLMProvider):
+        model = "main-model"
+
+        async def chat(self, messages, *, json_mode=False, max_tokens=None, model=None, timeout=60, retries=3):
+            calls.append((model, max_tokens, json_mode))
+            if model is None:
+                raise LLMServiceError("main model retired")
+            return '{"ok": true}'
+
+    svc = LLMService(Fake())
+    monkeypatch.setattr(settings, "llm_provider", "nvidia")
+    monkeypatch.setattr(settings, "llm_fallback_models", "backup-a,backup-b")
+    assert asyncio.run(svc.chat_json([{"role": "user", "content": "x"}], max_tokens=50)) == {"ok": True}
+    assert calls == [(None, 50, True), ("backup-a", 50, True)]            # main failed -> first backup answered
+    calls.clear()
+    assert asyncio.run(svc.chat([{"role": "user", "content": "x"}], max_tokens=20, model="backup-b")) == '{"ok": true}'
+    assert calls == [("backup-b", 20, False)]
+    monkeypatch.setattr(settings, "llm_provider", "openrouter")           # backups are NVIDIA ids: not used elsewhere
+    calls.clear()
+    with pytest.raises(LLMServiceError):
+        asyncio.run(svc.chat([{"role": "user", "content": "x"}]))
+    assert calls == [(None, settings.llm_default_max_tokens, False)]
+
+
+# ---------------------------------------------------------------- decision engine: ask, compare, learn, rules
+from app.shopping import engine as eng  # noqa: E402
+from app.shopping.policy import AutoOrderRule, ShoppingPolicy  # noqa: E402
+from app.shopping.preferences import build_preferences, learn_weights, normalize_product, same_product  # noqa: E402
+from app.shopping.providers import registry  # noqa: E402
+
+
+def _milk_history(store, zepto_days=(2, 4, 6, 8, 10, 12, 14, 16), blinkit_days=(1,)):
+    """Amul Taaza 1 L at ₹67 on Zepto (a strong habit by default) and ₹68 on Blinkit."""
+    rows = [("Zepto", d, 67) for d in zepto_days] + [("Blinkit", d, 68) for d in blinkit_days]
+    store[REAL] += [{"timestamp": f"2026-09-{d:02d}T09:00:00", "action": "order", "name": "Amul Taaza Toned Milk 1 L",
+                     "qty": 1, "price": price, "app": app, "source": "store_history"} for app, d, price in rows]
+    for app in ("Zepto", "Blinkit"):
+        store[REAL].append({"timestamp": "2026-10-03T08:00:00", "action": "history_sync", "app": app,
+                            "name": "order history", "source": "store_history"})
+
+
+def _ask(message, monkeypatch, intent=None):
+    async def llm(messages, **kw):
+        if intent is None:
+            raise LLMServiceError("offline")
+        return intent
+    monkeypatch.setattr(sa.llm_service, "chat_json", llm)
+    return client.post("/ai/shopping/ask", json={"userId": REAL, "message": message}).json()["data"]
+
+
+def test_same_product_across_stores():
+    a = normalize_product("Amul Taaza Homogenised Toned Milk 1L")
+    b = normalize_product("Amul Taaza Milk 1 L")
+    c = normalize_product("Amul Taaza Toned Milk 500 ml")
+    assert (a["brand"], a["category"], a["quantity"]) == ("Amul", "milk", "1 l")
+    assert same_product(a, b) and not same_product(a, c)
+    assert not same_product(a, normalize_product("Nandini Toned Milk 1 L"))
+
+
+def test_providers_are_data_not_code():
+    assert {"Blinkit", "Zepto", "Swiggy Instamart"} <= {p.name for p in registry.for_category("dairy")}
+    assert [p.name for p in registry.for_category("restaurant_food")] == ["Zomato"]
+    assert [p.name for p in registry.for_category("dairy", installed={"zapdo", "Amazon"})] == ["Zepto"]
+    r = asyncio.run(registry.get("Zepto").search("milk"))
+    assert r.status == "not_checked" and r.offers == []        # no API: it says so, it doesn't invent a price
+
+
+def test_known_item_usual_store_needs_one_yes(monkeypatch, memory_store):
+    _milk_history(memory_store)
+    d = _ask("order milk", monkeypatch)
+    a = d["assist"]
+    assert "cartOrder" not in d and a["question"] == "confirm" and a["level"] == 2
+    assert "Zepto" in a["say"] and "you last paid ₹67 there" in a["say"] and a["quickReplies"] == ["Yes", "No"]
+    d = _ask("yes", monkeypatch)
+    assert d["cartOrder"]["store"] == "Zepto"
+    assert d["cartOrder"]["items"] == [{"name": "Amul Taaza Toned Milk 1 L", "qty": 1}]     # their usual product
+    decision = next(e for e in memory_store[REAL] if e["action"] == "decision")
+    assert (decision["item"], decision["chosen"]) == ("milk", "Zepto")
+    assert {o["provider"] for o in decision["options"]} >= {"Zepto", "Blinkit"}
+
+
+def test_two_usual_stores_shows_both_and_asks_which(monkeypatch, memory_store):
+    """No clear favourite (Zepto 4x, Blinkit 2x): show both with the real prices and ask, don't assume."""
+    _milk_history(memory_store, zepto_days=(2, 6, 10, 14), blinkit_days=(20, 24))
+    a = _ask("order milk", monkeypatch)["assist"]
+    assert a["question"] == "choose_provider" and a["quickReplies"][:2] == ["Zepto", "Blinkit"]
+    assert "your usual Amul Taaza Toned Milk 1 L" in a["say"]
+    assert "Zepto — you last paid ₹67 there" in a["say"] and "Blinkit — you last paid ₹68 there" in a["say"]
+    assert "Swiggy Instamart — price not checked yet" in a["say"]
+    d = _ask("the cheaper one", monkeypatch)
+    assert d["cartOrder"]["store"] == "Zepto" and "what you last paid at each" in d["assist"]["say"]
+
+
+def test_cheaper_one_uses_real_prices_and_says_where_they_came_from(monkeypatch, memory_store):
+    _milk_history(memory_store)
+    _ask("order milk", monkeypatch)
+    d = _ask("actually blinkit", monkeypatch)                       # a store name overrides the suggestion
+    assert d["cartOrder"]["store"] == "Blinkit"
+    sessions.clear(REAL)
+    _ask("order milk", monkeypatch)
+    d = _ask("get the cheaper one", monkeypatch)
+    assert d["cartOrder"]["store"] == "Zepto"
+    assert "what you last paid at each" in d["assist"]["say"] and "₹67" in d["assist"]["say"]
+
+
+def test_new_product_shows_options_without_inventing_numbers(monkeypatch, memory_store):
+    d = _ask("buy shampoo", monkeypatch)
+    a = d["assist"]
+    assert "cartOrder" not in d and a["question"] == "choose_provider" and a["level"] == 1
+    assert all(o["final_cost"] is None and o["eta_minutes"] is None and o["source"] == "not_checked" for o in a["options"])
+    assert "price not checked yet" in a["say"] and "can't say which is cheapest" in a["say"]
+    d = _ask("the cheapest one", monkeypatch)                       # no prices to compare: say so, keep asking
+    assert "cartOrder" not in d and "don't have prices" in d["assist"]["say"] and d["assist"]["pending"]
+    d = _ask("zapdo", monkeypatch)                                  # speech spelling of Zepto
+    assert d["cartOrder"]["store"] == "Zepto"
+
+
+def test_no_cancels_and_new_order_replaces_pending_question(monkeypatch, memory_store):
+    _milk_history(memory_store)
+    _ask("order milk", monkeypatch)
+    d = _ask("no leave it", monkeypatch)
+    assert "cartOrder" not in d and not d["assist"]["pending"] and sessions.get(REAL) is None
+    _ask("order milk", monkeypatch)
+    d = _ask("order bread from blinkit", monkeypatch)               # a new request, not an answer about milk
+    assert "bread" in d["assist"]["say"].lower() and "milk" not in d["assist"]["say"].lower()
+
+
+def test_purchase_rules(monkeypatch, memory_store):
+    _milk_history(memory_store)
+    r = client.put("/ai/shopping/policy", params={"userId": REAL}, json={
+        "allow_auto_repeat_orders": True,
+        "auto_order_rules": [{"item": "milk", "provider": "Zepto", "max_price": 75, "max_qty": 2}]}).json()
+    assert r["allow_auto_repeat_orders"] and r["require_confirmation_above"] == 1000
+    d = _ask("order milk", monkeypatch)                             # level 3: inside the rule, no question
+    assert d["cartOrder"]["store"] == "Zepto" and d["assist"]["level"] == 3
+    d = _ask("order 3 milk", monkeypatch)                           # outside the rule (qty): ask
+    assert "cartOrder" not in d and d["assist"]["pending"]
+    sessions.clear(REAL)
+    policy = ShoppingPolicy(allow_auto_repeat_orders=True, auto_order_rules=[AutoOrderRule(item="milk", max_price=60)])
+    from app.shopping.policy import auto_rule, confirmation_reasons
+    assert auto_rule(policy, item="milk", provider="Zepto", qty=1, unit_price=67, known=True) is None   # price cap
+    assert auto_rule(policy, item="milk", provider="Zepto", qty=1, unit_price=None, known=True) is None  # unverifiable
+    reasons = confirmation_reasons(ShoppingPolicy(), known=True, total=1500, unit_price=90, typical_price=67)
+    assert len(reasons) == 2 and "above your ₹1,000 limit" in reasons[0] and "above what you usually pay" in reasons[1]
+
+
+def test_speed_versus_price_is_learnt_from_choices():
+    def choice(chosen):
+        return {"action": "decision", "chosen": chosen, "options": [
+            {"provider": "BigBasket", "final_cost": 65, "eta_minutes": 900},
+            {"provider": "Blinkit", "final_cost": 68, "eta_minutes": 10}]}
+    price_w, speed_w, conf, n = learn_weights([])
+    assert (price_w, speed_w, conf, n) == (0.5, 0.5, 0.0, 0)                       # no evidence: neutral
+    price_w, speed_w, conf, n = learn_weights([choice("Blinkit")] * 6 + [choice("BigBasket")])
+    assert speed_w > 0.7 and price_w < 0.3 and conf > 0.7 and n == 7               # pays ₹3 more to get it now
+    prefs = build_preferences([choice("Blinkit")] * 6)
+    fast = eng.Option(provider="Blinkit", label="Blinkit", final_cost=68, eta_minutes=10)
+    cheap = eng.Option(provider="BigBasket", label="BigBasket", final_cost=65, eta_minutes=900)
+    assert eng.rank([cheap, fast], prefs)[0].provider == "Blinkit"
+    assert eng.rank([cheap, fast], prefs, "cheapest")[0].provider == "BigBasket"   # unless they ask for cheapest
+
+
+def test_replies_are_understood():
+    s = sessions.start("u")
+    s.pending = "choose_provider"
+    s.options = [eng.Option(provider="Blinkit", label="Blinkit", final_cost=68),
+                 eng.Option(provider="Zepto", label="Zepto", final_cost=67)]
+    kind = lambda t: eng.interpret(t, s)  # noqa: E731
+    assert kind("go with zepto")[1].provider == "Zepto" and kind("the second one")[1].provider == "Zepto"
+    assert kind("option 2")[1].provider == "Zepto" and kind("number one")[1].provider == "Blinkit"
+    assert kind("buy the ₹67 one")[1].provider == "Zepto" and kind("blink it")[1].provider == "Blinkit"
+    assert kind("the cheapest one") == ("criterion", "cheapest") and kind("fastest delivery") == ("criterion", "fastest")
+    assert kind("whatever I usually buy") == ("criterion", "usual") and kind("get the same one from last time")[0] == "criterion"
+    assert kind("don't care, just order it") == ("any", None)
+    assert kind("yes please") == ("yes", None) and kind("nahi") == ("no", None) and kind("hmm what")[0] == "unknown"
+    sessions.clear("u")
+
+
+def test_chat_speaks_the_agents_question_and_routes_the_answer(monkeypatch, memory_store):
+    _milk_history(memory_store)
+
+    async def llm(messages, **kw):
+        raise LLMServiceError("offline")
+    monkeypatch.setattr(sa.llm_service, "chat_json", llm)
+    r = client.post("/ai/chat", json={"userId": REAL, "message": "order milk"}).json()
+    assert "Shall I add it to your cart?" in r["reply"] and "cartOrder" not in r["agentData"]["shopping"]
+    r = client.post("/ai/chat", json={"userId": REAL, "message": "yes"}).json()        # no shopping keyword: still routed
+    assert r["agentsConsulted"] == ["shopping"] and r["agentData"]["shopping"]["cartOrder"]["store"] == "Zepto"
+
+
+def test_store_from_history_is_not_treated_as_named(monkeypatch, memory_store):
+    """'I need milk quickly' names no store: a store the intent model lifts from history must not skip the
+    question, and with no delivery times read, 'fastest' is answered honestly."""
+    _milk_history(memory_store)
+    d = _ask("I need milk quickly", monkeypatch, intent={"intent": "order", "store": "Zepto",
+                                                         "items": [{"name": "milk", "qty": 1}]})
+    a = d["assist"]
+    assert "cartOrder" not in d and a["question"] == "confirm"
+    assert "haven't read delivery times live" in a["say"] and "quick-delivery app" in a["say"]
+    assert sa._store_in_message("order milk from zapdo", "Zepto") == "Zepto"
+    assert sa._store_in_message("order rice from lulu", "Lulu Hypermarket") == "Lulu Hypermarket"
+    assert sa._store_in_message("order milk", "Zepto") is None

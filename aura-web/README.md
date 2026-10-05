@@ -112,3 +112,17 @@ Three independent safety nets enforce "AURA fills the cart, the user pays":
 For a local backend on the emulator, set `VITE_API_URL=http://10.0.2.2:4000`. Cleartext HTTP is allowed only for that host and localhost (`res/xml/network_security_config.xml`).
 
 No iOS plugin yet — `AuraCartAssistantPlugin`/`CartAssistantActivity` are Android-only; an iOS build would need an equivalent `WKWebView`-based Swift plugin under `ios/App/App/` once `npx cap add ios` is run (requires Xcode/macOS).
+
+## "Hey Aura" wake word (Android)
+
+`WakeWordService` listens for "Hey Aura" in the background with [Vosk](https://alphacephei.com/vosk/) (offline, on the phone; the recogniser only knows the wake phrase). It is off until the user turns it on in **Voice → "Hey Aura" wake word**, shows a permanent notification while on, and must be switched on with the app open (Android 14 rule for microphone services). On the phrase it frees the microphone, brings AURA forward and fires the `wake` event; `services/wake.ts` + `companion.wakeTalk` then capture the command with the normal recogniser and answer by voice. Anything in the app that listens calls `holdWake()` / `releaseWake()` so the two never share the mic.
+
+The speech model (55 MB) is not in git. Before building the Android app, download and unpack it once:
+
+```bash
+curl -L -o vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-in-0.4.zip
+unzip vosk.zip && mv vosk-model-small-en-in-0.4 android/app/src/main/assets/model-en-in
+uuidgen > android/app/src/main/assets/model-en-in/uuid   # any unique text; Vosk uses it as the model version
+```
+
+Not available on iOS (no third-party always-listening) or the web.

@@ -16,8 +16,24 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Release signing: the key and its password live in android/keystore.properties + aura-release.jks, which are
+    // not in git. Without them a release build is left unsigned.
+    def keystoreFile = rootProject.file('keystore.properties')
+    signingConfigs {
+        if (keystoreFile.exists()) {
+            release {
+                def props = new Properties()
+                keystoreFile.withInputStream { props.load(it) }
+                storeFile rootProject.file(props['storeFile'])
+                storePassword props['storePassword']
+                keyAlias props['keyAlias']
+                keyPassword props['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
+            if (keystoreFile.exists()) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -40,6 +56,9 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+    // "Hey Aura" wake word: offline speech recognition (WakeWordService)
+    implementation 'net.java.dev.jna:jna:5.13.0@aar'
+    implementation 'com.alphacephei:vosk-android:0.3.47'
 }
 
 apply from: 'capacitor.build.gradle'

@@ -4,7 +4,8 @@ import { Mic, Volume2, Loader2, X, BellOff } from 'lucide-react';
 import { Toggle } from '../ui';
 import { companionPrefsStore, dayLogsStore, doseLogsStore, mealsStore, medicinesStore } from '../../state/stores';
 import { useUser } from '../../state/user';
-import { companionStore, dueCheckIn, isBusy, runCheckIn, savePrefs, setCompanionName, talk, DEFAULT_COMPANION_PREFS } from '../../services/companion';
+import { answerWake, companionStore, dueCheckIn, isBusy, runCheckIn, savePrefs, setCompanionName, talk, DEFAULT_COMPANION_PREFS } from '../../services/companion';
+import { initWake } from '../../services/wake';
 
 const TICK_MS = 30_000;
 
@@ -27,6 +28,13 @@ export default function CompanionHost() {
   navRef.current = nav;
 
   useEffect(() => { if (user.signedIn) setCompanionName(user.name); }, [user.signedIn, user.name]);
+
+  // "Hey Aura": the background service listens and shows its own small overlay over whatever app is open; this
+  // only works out the answer to what was said. The app stays in the background.
+  useEffect(() => {
+    if (!user.signedIn) return;
+    return initWake((text) => answerWake(text, (path, opts) => navRef.current(path, opts)));
+  }, [user.signedIn]);
 
   // Speak first: look for a due check-in every TICK_MS while the app is on screen.
   useEffect(() => {

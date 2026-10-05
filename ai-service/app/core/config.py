@@ -20,12 +20,18 @@ class Settings(BaseSettings):
 
     nvidia_api_key: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nvidia_model: str = "nvidia/nemotron-3-ultra-550b-a55b"  # the old nemotron-3-super was retired by NVIDIA (HTTP 410)
+    nvidia_model: str = "openai/gpt-oss-20b"
+    # Tried in order when the main model fails. Hosted models are retired or overloaded without notice
+    # (nemotron-3-super was switched off on 2026-10-03), so one model must never be a single point of failure.
+    llm_fallback_models: str = "openai/gpt-oss-20b,nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3.5-lightning-30b-a3b"
 
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     # Fast and reliable for short spoken replies (~3 s). Any OpenRouter model id works.
     openrouter_model: str = "anthropic/claude-haiku-4.5"
+    # Reply-length cap used when a caller doesn't set one. Without it a request reserves the model's full output
+    # limit (64k tokens on Claude), which pay-per-token providers refuse when the account's credit is low.
+    llm_default_max_tokens: int = 1500
 
     voice_provider: str = "gemini"  # "gemini" | "elevenlabs"
 
@@ -67,6 +73,12 @@ class Settings(BaseSettings):
     # The cart agent asks the LLM only for screens its fast path can't handle. It tries this quicker model
     # first (with a short timeout), then the main model (nvidia_model / grok_model). Empty = main model only.
     shopping_agent_model: str = "openai/gpt-oss-20b"
+
+    @property
+    def cart_agent_model(self) -> str | None:
+        """The quicker model for cart-agent steps. It is an NVIDIA model id, so it only applies when NVIDIA is the
+        provider; with Grok/OpenRouter the provider's own model is used (None)."""
+        return (self.shopping_agent_model or None) if self.llm_provider == "nvidia" else None
     shopping_agent_timeout_s: float = 25.0
 
 

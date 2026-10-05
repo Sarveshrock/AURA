@@ -138,12 +138,12 @@ public class AuraPhonePlugin extends Plugin {
         call.resolve();
     }
 
-    private static String norm(String s) {
+    static String norm(String s) {
         return s == null ? "" : s.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9 ]", " ").replaceAll("\\s+", " ").trim();
     }
 
     /** Common spoken names that differ from the app's label. */
-    private static String alias(String n) {
+    static String alias(String n) {
         switch (n) {
             case "gpay": case "g pay": return "google pay";
             case "insta": return "instagram";
@@ -158,7 +158,7 @@ public class AuraPhonePlugin extends Plugin {
     }
 
     /** 4 = exact label, 3 = label starts with / is contained in the spoken name, 2 = label contains it, 1 = shares a word. */
-    private static int score(String label, String q) {
+    static int score(String label, String q) {
         if (label.isEmpty()) return 0;
         if (label.equals(q)) return 4;
         if (label.startsWith(q) || q.startsWith(label)) return 3;

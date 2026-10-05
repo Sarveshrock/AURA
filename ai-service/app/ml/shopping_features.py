@@ -11,7 +11,8 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from app.ml.shopping_catalog import CATALOG, canonical_app, canonical_item, item_category
+from app.ml.shopping_catalog import (CATALOG, FOOD_APPS, RESTAURANT_FOOD, canonical_app, canonical_item, dish_item,
+                                     item_category)
 
 HORIZON_DAYS = 7.0
 APP_TAU_DAYS = 60.0
@@ -47,20 +48,34 @@ def normalize_events(events: pd.DataFrame | list[dict]) -> pd.DataFrame:
     df = df[df["timestamp"].notna()]
     df["action"] = df["action"].astype(str).str.lower()
     df = df[df["action"].isin(ACTIONS)]
+    # A cart AURA filled, or a command to fill one, is intent: AURA can't see whether it was paid for. Real
+    # purchases come from the stores' own order history and from invoices.
+    ours = df["source"].isin(["agent_command", "cart_agent"]) & (df["action"] == "order")
+    df.loc[ours, "action"] = "add_to_cart"
     # the product name is the source of truth (labels stored earlier may come from an older matcher)
     has_name = df["name"].notna() & (df["name"].astype(str).str.strip() != "")
     raw_item = df["name"].where(has_name, df["item"])
-    df["item"] = [canonical_item(v if isinstance(v, str) else None) for v in raw_item]
-    df = df[df["item"] != "none"]
-    df["name"] = df["name"].where(df["name"].notna(), df["item"]).astype(str)
-    df["category"] = [c if isinstance(c, str) and c and c != "none" and it not in CATALOG else item_category(it)
-                      for c, it in zip(df["category"], df["item"])]
     df["app"] = [canonical_app(a if isinstance(a, str) else None) for a in df["app"]]
+    # restaurant food (by category, or anything from a food-delivery app) keeps the dish as the item
+    food = (df["category"].astype(str) == RESTAURANT_FOOD) | df["app"].isin(FOOD_APPS)
+    df["item"] = [dish_item(v if isinstance(v, str) else None) if f else canonical_item(v if isinstance(v, str) else None)
+                  for v, f in zip(raw_item, food)]
+    df["category"] = [RESTAURANT_FOOD if f else
+                      (c if isinstance(c, str) and c and c != "none" and it not in CATALOG else item_category(it))
+                      for c, it, f in zip(df["category"], df["item"], food)]
+    keep = df["item"] != "none"
+    df = df[keep]
+    df["name"] = df["name"].where(df["name"].notna(), df["item"]).astype(str)
     df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(1.0).clip(lower=0)
     df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0.0)
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(df["price"] * df["qty"])
     df["source"] = df["source"].where(df["source"].notna(), "app").astype(str)
     df = df.sort_values("timestamp", kind="mergesort").reset_index(drop=True)
+    # the same order line read twice from a store screen ("48 g" vs "48g"): one purchase
+    imported = df["source"].isin(["store_history", "invoice"]) & (df["action"] == "order")
+    key = (df["app"].astype(str) + "|" + df["timestamp"].dt.strftime("%Y-%m-%d").astype(str) + "|"
+           + df["name"].astype(str).str.lower().str.replace(r"[^a-z0-9]", "", regex=True))
+    df = df[~(imported & key.duplicated())].reset_index(drop=True)
     return _collapse_repeat_commands(df)
 
 

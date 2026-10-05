@@ -91,6 +91,66 @@ shoppingRouter.post('/events', requireAuth, async (req: AuthedRequest, res, next
   }
 });
 
+// One turn with the shopping assistant: it understands the request against the user's history, shows the real
+// options, asks when it should, and only returns a cart job once the user (or their rules) decided.
+const assistSchema = z.object({
+  message: z.string().min(1).max(1500),
+  installedStores: z.array(z.string().max(60)).max(40).optional(),
+});
+shoppingRouter.post('/assist', requireAuth, async (req: AuthedRequest, res, next) => {
+  const parsed = assistSchema.safeParse(req.body);
+  if (!parsed.success) return next(new ApiError(400, parsed.error.issues.map((i) => i.message).join(', ')));
+  try {
+    res.json(await aiClient.shoppingAssist({ userId: req.userId ?? 'anonymous', ...parsed.data }));
+  } catch (err) {
+    if (err instanceof AiServiceError) return res.status(503).json({ error: 'The shopping assistant is temporarily unavailable.' });
+    next(err);
+  }
+});
+
+// The user's purchase rules (what needs a confirmation, what may be ordered automatically).
+const policySchema = z.object({
+  require_confirmation_for_new_product: z.boolean(),
+  require_confirmation_above: z.number().min(0).max(10_000_000),
+  max_price_deviation_percent: z.number().min(0).max(1000),
+  allow_auto_repeat_orders: z.boolean(),
+  auto_order_rules: z.array(z.object({
+    item: z.string().min(1).max(80),
+    provider: z.string().max(60).nullish(),
+    max_price: z.number().min(0).nullish(),
+    max_qty: z.number().int().min(1).max(50),
+  })).max(50),
+  min_provider_confidence: z.number().min(0).max(1),
+});
+shoppingRouter.get('/policy', requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    res.json({ data: await aiClient.shoppingPolicy(req.userId ?? 'anonymous') });
+  } catch (err) {
+    if (err instanceof AiServiceError) return res.status(503).json({ error: 'Shopping rules are temporarily unavailable.' });
+    next(err);
+  }
+});
+shoppingRouter.put('/policy', requireAuth, async (req: AuthedRequest, res, next) => {
+  const parsed = policySchema.safeParse(req.body);
+  if (!parsed.success) return next(new ApiError(400, parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')));
+  try {
+    res.json({ data: await aiClient.saveShoppingPolicy(req.userId ?? 'anonymous', parsed.data) });
+  } catch (err) {
+    if (err instanceof AiServiceError) return res.status(503).json({ error: 'Could not save your shopping rules.' });
+    next(err);
+  }
+});
+
+// What AURA has learnt about the user's shopping (usual products, stores, rhythm, price-vs-speed), with confidence.
+shoppingRouter.get('/preferences', requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    res.json({ data: await aiClient.shoppingPreferences(req.userId ?? 'anonymous') });
+  } catch (err) {
+    if (err instanceof AiServiceError) return res.status(503).json({ error: 'Shopping preferences are temporarily unavailable.' });
+    next(err);
+  }
+});
+
 shoppingRouter.get('/model', requireAuth, async (_req, res, next) => {
   try {
     res.json({ data: await aiClient.shoppingModel() });
@@ -126,6 +186,7 @@ const stepSchema = z.object({
     qty: z.number().int().min(1).max(50),
     status: z.enum(['pending', 'added', 'failed']),
     note: z.string().max(200).nullish(),
+    hint: z.string().max(200).nullish(),
   })).max(30),
   url: z.string().max(2000),
   title: z.string().max(300).default(''),

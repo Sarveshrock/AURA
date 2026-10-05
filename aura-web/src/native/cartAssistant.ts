@@ -4,6 +4,8 @@ import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 export interface QuickCartNativeItem {
   name: string; qty: number;
   head?: string[]; must?: string[][]; avoid?: string[]; exclude?: string[]; size?: string; brand?: string;
+  /** extra targeting from the user's history, e.g. "from restaurant Biryani Zest" */
+  hint?: string;
 }
 
 export interface QuickCartProgressEvent { index: number; total: number; ok: boolean; note: string }

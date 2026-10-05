@@ -6,6 +6,7 @@ import re
 from app.agents.domain_agents import AGENT_REGISTRY
 from app.models.schemas import AgentResult
 from app.services.travel_places import cities_in
+from app.shopping.session import sessions
 
 # Simple keyword routing. A production system would use the LLM itself to
 # select relevant agents, but keeping this deterministic keeps the
@@ -48,7 +49,11 @@ class Coordinator:
 
     async def consult(self, situation: str, context: dict | None = None) -> list[AgentResult]:
         context = context or {}
-        agent_names = select_agents(situation)
+        # "Zepto" / "the cheaper one" / "yes" carry no keyword: route them by the conversation they belong to
+        if sessions.pending(context.get("userId")):
+            agent_names = ["shopping"]
+        else:
+            agent_names = select_agents(situation)
         agents = [AGENT_REGISTRY[name]() for name in agent_names if name in AGENT_REGISTRY]
 
         results = await asyncio.gather(*(agent.run(situation, context) for agent in agents))

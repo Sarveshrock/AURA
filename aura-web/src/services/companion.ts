@@ -9,6 +9,8 @@ import { browserVoice } from './voice';
 import { speakNow, stopSpeakingNow } from './speech';
 import { recordDose, parseDoseId } from './medicine';
 import { orderDestination } from './orderFlow';
+import { shopAssist } from './shopping';
+import { startQuickCart } from './extension';
 import { AuraPhone } from '../native/phone';
 
 /**
@@ -128,6 +130,35 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 interface Handled { say?: string; passToModel?: boolean }
 
+/* ---------- shopping by voice ---------- */
+
+/** The shopping assistant asked something ("Which one should I use?") and is waiting for the answer. */
+let shoppingPending = false;
+
+/** Text as it should be spoken: "₹67" -> "67 rupees", no dates in brackets, no dashes. */
+const speakable = (text: string) => text
+  .replace(/₹\s?([\d,]+(?:\.\d+)?)/g, '$1 rupees')
+  .replace(/\s*\(\d{4}-\d{2}-\d{2}\)/g, '')
+  .replace(/\s+—\s+/g, ', ')
+  .replace(/\s+x(\d+)\b/g, ' times $1');
+
+/**
+ * One spoken turn with the shopping assistant: it understands the order against the user's history, compares what
+ * it really knows, asks before a new purchase, and starts the cart only once decided. null = not a shopping turn.
+ */
+async function shopByVoice(text: string): Promise<string | null> {
+  try {
+    const r = await shopAssist(text);
+    if (!r.handled) { shoppingPending = false; return null; }
+    shoppingPending = !!r.pending;
+    if (r.cartOrder?.items?.length) void startQuickCart({ ...r.cartOrder });
+    return speakable(r.say ?? '');
+  } catch {
+    shoppingPending = false;
+    return null;
+  }
+}
+
 function answerPending(t: string, p: Pending, now: number): Handled | null {
   const yes = YES.test(t);
   const no = NO.test(t);
@@ -196,6 +227,11 @@ async function understandLocally(raw: string, nav: Nav, now: number): Promise<Ha
   }
 
   const dest = orderDestination(raw);
+  if (dest === '/shopping') {
+    // by voice, the whole exchange stays spoken: the assistant asks, the user answers, the cart starts
+    const spoken = await shopByVoice(raw);
+    if (spoken !== null) return { say: spoken };
+  }
   if (dest) { nav(dest, { state: { ask: raw } }); return { say: dest === '/shopping' ? 'Let me set that up in shopping.' : 'Let me open your medicines.' }; }
 
   if (/\b(drank|drink|had|finished|downed|piya|pee)\b/.test(t) && /\b(glass(?:es)?|cups?|bottles?|water|paani|pani)\b/.test(t)) {
@@ -255,6 +291,12 @@ export async function handleUtterance(text: string, nav: Nav): Promise<string> {
   const t = text.trim();
   if (!t) return '';
   remember('user', t);
+
+  // an answer to the shopping assistant's question ("Zepto", "the cheaper one", "yes")
+  if (shoppingPending) {
+    const spoken = await shopByVoice(t);
+    if (spoken !== null) { remember('aura', spoken); return spoken; }
+  }
 
   if (pending && pending.until > now) {
     const p = pending;
@@ -316,7 +358,7 @@ async function loop(first: string, nav: Nav) {
     try { reply = await handleUtterance(heard, nav); } catch { reply = 'Sorry, I had trouble with that. Could you say it again?'; setState({ error: 'AURA could not reach its brain.' }); }
     if (!reply) break;
     await say(reply);
-    heard = /\?\s*$/.test(reply) || pending ? await listenOnce() : '';
+    heard = /\?\s*$/.test(reply) || pending || shoppingPending ? await listenOnce() : '';
   }
 }
 
@@ -343,6 +385,19 @@ export async function talk(nav: Nav) {
     busy = false;
     setState({ phase: 'idle' });
   }
+}
+
+
+/**
+ * A command spoken after "Hey Aura", already transcribed by the background service. Same brain as a tap on the orb,
+ * but nothing is shown or spoken here: the service's overlay does that, over whatever app the user is in.
+ * expectAnswer keeps the overlay listening (AURA asked something); openApp is set when the answer lives on a screen
+ * of the app (so it is opened after the reply), which is the only time the app comes forward.
+ */
+export async function answerWake(text: string, nav: Nav): Promise<{ say: string; expectAnswer: boolean; openApp: boolean }> {
+  let navigated = false;
+  const say = await handleUtterance(text, (path, opts) => { navigated = true; nav(path, opts); });
+  return { say, expectAnswer: /\?\s*$/.test(say) || !!pending || shoppingPending, openApp: navigated };
 }
 
 
@@ -401,4 +456,4 @@ export async function runCheckIn(c: NonNullable<ReturnType<typeof dueCheckIn>>, 
   if (pending && pending.question === c.question) pending = null; // unanswered: don't treat a later remark as the answer
 }
 
-export const resetCompanionSession = () => { pending = null; history.length = 0; snoozedDoses.clear(); doseAsks.clear(); };
+export const resetCompanionSession = () => { shoppingPending = false; pending = null; history.length = 0; snoozedDoses.clear(); doseAsks.clear(); };

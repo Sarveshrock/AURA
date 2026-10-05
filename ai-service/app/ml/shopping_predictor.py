@@ -61,7 +61,8 @@ class ShoppingPredictor:
         tuned, tuned_meta = runtime_dir / "shopping_finetuned.txt", runtime_dir / "shopping_finetuned.json"
         if tuned.exists() and tuned_meta.exists():
             meta = json.loads(tuned_meta.read_text())
-            if meta.get("baseModel") == BASE_VERSION:
+            # only models that passed the held-out check are served (older, unvalidated fine-tunes are ignored)
+            if meta.get("baseModel") == BASE_VERSION and meta.get("validation"):
                 self.model, self.meta = lgb.Booster(model_file=str(tuned)), meta
 
     # ------------------------------------------------------------------ predict
@@ -124,9 +125,9 @@ class ShoppingPredictor:
     def finetune(self, users_events: dict[str, list[dict]], now: pd.Timestamp, reason: str) -> dict:
         """Safe retrain on real users' history. A candidate (base model + new trees fit on real rows mixed with a
         synthetic sample, so general patterns aren't forgotten) is trained WITHOUT the last HOLDOUT_DAYS, then
-        scored on those held-out weeks against the serving model and the base model: did it predict what people
-        actually bought? Only a clearly better candidate is promoted (refit on all data, previous model kept as
-        a backup). Not enough recent history to check -> nothing changes. Always restarts from the base."""
+        scored on those held-out weeks against the base model: did learning from real history predict what people
+        actually bought better? Only a clearly better candidate is promoted (refit on all data, previous model
+        kept as a backup). Not enough recent history to check -> nothing changes. Always restarts from the base."""
         t0 = time.time()
         real = self._real_rows(users_events, now)
         result = {"at": now.isoformat(), "trigger": reason, "realRows": len(real),
@@ -148,15 +149,18 @@ class ShoppingPredictor:
                         params={"learning_rate": 0.03}, init_model=self.base)
         scores = {name: _score(m, holdout, self.categories) for name, m in
                   (("candidate", candidate), ("current", self.model), ("base", self.base))}
-        cur, cand = scores["current"], scores["candidate"]
-        better = (cand["logloss"] <= cur["logloss"] * (1 - SWAP_MARGIN)
-                  and cand["precisionAt3"] >= cur["precisionAt3"] - 0.02)
+        # The fair yardstick is the base model: like the candidate, it has never seen the held-out weeks. The
+        # serving model was refit on all data at its own promotion, so it may already know part of this period;
+        # its score is reported but doesn't decide.
+        ref, cand = scores["base"], scores["candidate"]
+        better = (cand["logloss"] <= ref["logloss"] * (1 - SWAP_MARGIN)
+                  and cand["precisionAt3"] >= ref["precisionAt3"] - 0.02)
         result |= {"holdoutDays": HOLDOUT_DAYS, "holdoutRows": len(holdout),
                    "holdoutPositives": int(holdout["label"].sum()), "scores": scores}
         if not better:
             return self._retrain_result(result | {
                 "status": "kept", "seconds": round(time.time() - t0, 1),
-                "reason": "the new model didn't predict recent purchases better than the current one"})
+                "reason": "a model trained on real history didn't predict recent purchases better than the base model"})
 
         final_rounds = int(min(150, 10 + len(real) // 50))
         final = fit(self._mix(base_rows, real), self.categories, rounds=final_rounds, params={"learning_rate": 0.03},
@@ -172,7 +176,7 @@ class ShoppingPredictor:
                 "addedTrees": final_rounds, "validation": scores, "trigger": reason}
         (self.runtime_dir / "shopping_finetuned.json").write_text(json.dumps(meta, indent=1))
         self.model, self.meta = final, meta
-        logger.info("shopping_model.promoted", realRows=len(real), candidate=cand, current=cur)
+        logger.info("shopping_model.promoted", realRows=len(real), candidate=cand, base=ref)
         return self._retrain_result(result | {"status": "trained", "seconds": round(time.time() - t0, 1)})
 
     def _retrain_result(self, result: dict) -> dict:

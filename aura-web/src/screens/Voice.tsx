@@ -4,9 +4,10 @@ import {
   AudioLines, CalendarDays, Plane, Target, Volume2, VolumeX, ChevronRight, Mic, Wallet, ShoppingCart,
   X, Send, Sun, Radar, Workflow, Grid2x2, HelpCircle, SquareCheck, Keyboard, Settings, Lightbulb, Cpu,
 } from 'lucide-react';
-import { AuraAvatar, Hud, Wave, StatusBadge, VoiceVisualizer, NeonButton, type AuraState } from '../components/aura';
+import { AuraAvatar, Hud, Wave, StatusBadge, VoiceVisualizer, NeonButton, Toggle, type AuraState } from '../components/aura';
 import { browserVoice, serverVoice } from '../services/voice';
 import { handleUtterance } from '../services/companion';
+import { requestOverlayPermission, setWakeEnabled, wakeStore, wakeSupported } from '../services/wake';
 import { useUser } from '../state/user';
 
 const commands = [
@@ -26,6 +27,7 @@ export default function Voice() {
   const nav = useNavigate();
   const user = useUser();
   const [state, setState] = useState<AuraState>('idle');
+  const wake = wakeStore.use();
   const [muted, setMuted] = useState(false);
   const [draft, setDraft] = useState('');
   const [lines, setLines] = useState<Line[]>([]);
@@ -39,19 +41,24 @@ export default function Voice() {
     return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   };
 
+  const turn = useRef(0);
   const respond = async (text: string) => {
+    const mine = ++turn.current; // a newer command replaces this one: its reply is shown but not spoken
+    serverVoice.stop();
     setState('thinking');
     setError('');
     try {
       // Same fast brain as the companion orb: simple things are understood on the phone, the rest takes one short model call.
       const reply = await handleUtterance(text, (path, opts) => nav(path, opts));
+      if (mine !== turn.current) return; // a newer command replaced this one
       if (!reply) { setState('idle'); return; }
       setLines((l) => [...l, { who: 'AURA', text: reply, t: stamp() }]);
       if (mutedRef.current) { setState('idle'); return; }
       setState('speaking');
       await serverVoice.speak(reply);
-      setState('idle');
+      if (mine === turn.current) setState('idle');
     } catch (e) {
+      if (mine !== turn.current) return;
       setState('idle');
       setError(e instanceof Error && /bearer|401/i.test(e.message) ? 'Sign in to talk to AURA.' : 'AURA could not respond right now. Please try again.');
     }
@@ -94,6 +101,25 @@ export default function Voice() {
         </div>
       </div>
 
+      {wakeSupported && (
+        <div className="tile row" style={{ gap: 12, margin: '12px 0', padding: '12px 16px', alignItems: 'center' }}>
+          <Mic size={20} className="c-cyan" />
+          <div className="grow">
+            <b>"Hey Aura" wake word</b>
+            <div className="t-sub" style={{ fontSize: 12 }}>
+              {wake.error || (wake.enabled
+                ? 'On. Say "Hey Aura" from any screen, pause, then your command. A small panel answers; the app stays closed.'
+                : 'Off. Turn on to call AURA by voice without opening the app (listens on this phone only).')}
+            </div>
+            {wake.enabled && wake.surface === null && (
+              <button className="link c-blue" style={{ background: 'none', border: 0, padding: 0, fontSize: 12, textAlign: 'left' }} onClick={requestOverlayPermission}>
+                The panel can't appear over other apps yet: allow "Display over other apps" (or turn on AURA in Accessibility). Until then it answers by voice only.
+              </button>
+            )}
+          </div>
+          <Toggle on={wake.enabled} label="Hey Aura wake word" onChange={(v) => void setWakeEnabled(v)} />
+        </div>
+      )}
       <div className="voice-grid">
         <div className="stack">
           <Hud corners title={<span className="hud-label" style={{ fontSize: 13 }}>Voice Commands</span>} icon={AudioLines}>
@@ -146,6 +172,14 @@ export default function Voice() {
             <div className="list">
               <div className="li"><Mic size={18} className="c-cyan" /><span className="grow">Speech-to-text</span><span className="t-sub">{browserVoice.supported ? 'Browser' : 'Unavailable here'}</span></div>
               <div className="li"><Cpu size={18} className="c-cyan" /><span className="grow">Text-to-speech</span><span className="t-sub">Server voice</span></div>
+              {wakeSupported && (
+                <div className="li"><Mic size={18} className="c-cyan" />
+                  <span className="grow">"Hey Aura" wake word<br /><span className="t-sub" style={{ fontSize: 11.5 }}>
+                    {wake.error || (wake.enabled ? 'Listening on this phone (offline). Shows a notification; uses some battery.' : 'Say "Hey Aura" from any screen, without opening the app.')}
+                  </span></span>
+                  <Toggle on={wake.enabled} label="Hey Aura wake word" onChange={(v) => void setWakeEnabled(v)} />
+                </div>
+              )}
               <button className="li" style={{ background: 'none', border: 0, width: '100%' }} onClick={() => nav('/settings')}><Settings size={18} className="c-cyan" /><span className="grow" style={{ textAlign: 'left' }}>Voice settings</span><ChevronRight size={14} /></button>
             </div>
             {!browserVoice.supported && <div className="t-mute" style={{ marginTop: 6 }}>This browser can't transcribe speech — type your command after tapping the mic.</div>}

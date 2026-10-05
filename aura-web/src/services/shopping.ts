@@ -81,3 +81,48 @@ export async function getShoppingForecast(demoUser?: string): Promise<ShoppingFo
   const res = await apiGet<{ data: ShoppingForecast }>('/shopping/predictions', { demoUser });
   return res.data;
 }
+
+/* ---------- Shopping assistant (server decision engine) ---------- */
+
+export interface AssistOption {
+  provider: string; label: string; final_cost: number | null; eta_minutes: number | null;
+  /** Where the numbers came from: live_app | your_last_order | not_checked */
+  source: string; observed: string | null; kind: string;
+}
+export interface AssistReply {
+  /** false: not an order or an answer to a shopping question; use normal chat */
+  handled: boolean;
+  say?: string;
+  pending?: boolean;
+  question?: 'choose_provider' | 'confirm' | null;
+  options?: AssistOption[];
+  quickReplies?: string[];
+  level?: number;
+  reasons?: string[];
+  cartOrder?: { store: string; startUrl?: string; androidPackage?: string | null; appLabel?: string;
+    items: { name: string; qty: number; hint?: string }[]; syncHistory?: boolean; resolved?: boolean } | null;
+}
+
+/** One turn with the shopping assistant. It asks before a new purchase and only returns a cart job once decided. */
+export const shopAssist = (message: string) => apiSend<AssistReply>('POST', '/shopping/assist', { message });
+
+export interface AutoOrderRule { item: string; provider?: string | null; max_price?: number | null; max_qty: number }
+export interface ShoppingPolicy {
+  require_confirmation_for_new_product: boolean;
+  require_confirmation_above: number;
+  max_price_deviation_percent: number;
+  allow_auto_repeat_orders: boolean;
+  auto_order_rules: AutoOrderRule[];
+  min_provider_confidence: number;
+}
+export const getShoppingPolicy = async () => (await apiGet<{ data: ShoppingPolicy }>('/shopping/policy')).data;
+export const saveShoppingPolicy = async (p: ShoppingPolicy) => (await apiSend<{ data: ShoppingPolicy }>('PUT', '/shopping/policy', p)).data;
+
+export interface ItemPreference {
+  item: string; product: string; usual_qty: number; provider: string | null; provider_confidence: number;
+  times_ordered: number; typical_gap_days: number | null; typical_price: number | null; known: boolean;
+}
+export interface ShoppingMemory {
+  items: ItemPreference[]; price_weight: number; speed_weight: number; weights_confidence: number; decisions: number;
+}
+export const getShoppingMemory = async () => (await apiGet<{ data: ShoppingMemory }>('/shopping/preferences')).data;

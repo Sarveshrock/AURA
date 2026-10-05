@@ -61,6 +61,8 @@ final class CartJobBridge {
             JSONObject it = new JSONObject();
             it.put("name", src.getString("name"));
             it.put("qty", Math.max(1, src.optInt("qty", 1)));
+            // extra targeting from the user's history, e.g. "from restaurant Biryani Zest"
+            if (!src.isNull("hint")) it.put("hint", src.optString("hint"));
             it.put("status", "pending");
             items.put(it);
         }
@@ -84,6 +86,8 @@ final class CartJobBridge {
             JSONObject it = new JSONObject();
             it.put("name", src.getString("name"));
             it.put("qty", Math.max(1, src.optInt("qty", 1)));
+            // extra targeting from the user's history, e.g. "from restaurant Biryani Zest"
+            if (!src.isNull("hint")) it.put("hint", src.optString("hint"));
             it.put("status", "pending");
             next.put(it);
         }

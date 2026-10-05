@@ -59,6 +59,21 @@ export const aiClient = {
   logShoppingEvents: (payload: { userId: string; events: Record<string, unknown>[] }) =>
     callAi<{ stored: number; storedIn: string }>('/ai/shopping/events', payload),
 
+  shoppingAssist: (payload: { userId: string; message: string; installedStores?: string[] }) =>
+    callAi<Record<string, unknown>>('/ai/shopping/assist', payload),
+
+  shoppingPolicy: (userId: string) => getAi<Record<string, unknown>>('/ai/shopping/policy', { userId }),
+
+  saveShoppingPolicy: async (userId: string, policy: unknown) => {
+    const res = await fetch(`${env.pythonAiUrl}/ai/shopping/policy?userId=${encodeURIComponent(userId)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(policy),
+    });
+    if (!res.ok) throw new AiServiceError(`AI service /ai/shopping/policy failed with ${res.status}: ${await res.text().catch(() => '')}`);
+    return (await res.json()) as Record<string, unknown>;
+  },
+
+  shoppingPreferences: (userId: string) => getAi<Record<string, unknown>>('/ai/shopping/preferences', { userId }),
+
   shoppingModel: () => getAi<Record<string, unknown>>('/ai/shopping/model', {}),
 
   cartAgentStore: (name: string) =>

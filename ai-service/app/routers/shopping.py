@@ -10,13 +10,17 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.agents.shopping_agent import ShoppingAgent
+from app.agents.shopping_agent import ShoppingAgent, load_policy, save_policy
 from app.core.config import settings
 from app.ml.shopping_predictor import get_predictor, now_ist, retrain_scheduler
 from app.models.schemas import AgentResult
 from app.services import recommendation_service as reco
 from app.services.shopping_browser import StepAction, StepRequest, next_step, resolve_store
 from app.services.shopping_history import ShoppingHistoryError, shopping_history
+from app.shopping.policy import ShoppingPolicy
+from app.shopping.preferences import build_preferences
+from app.shopping.providers import registry
+from app.shopping.session import sessions
 from app.services.shopping_service import ShoppingResult, ShoppingServiceError, search_products
 
 router = APIRouter(prefix="/ai/shopping", tags=["shopping"])
@@ -174,3 +178,63 @@ async def browse_store(name: str = Query(..., min_length=1)):
 async def browse_step(req: StepRequest):
     """Given a snapshot of the current page, the single next action. Never pays or checks out."""
     return await next_step(req)
+
+
+# ---------------------------------------------------------------------------
+# Shopping assistant: intent -> memory -> options -> decision (ask / confirm / act)
+# ---------------------------------------------------------------------------
+class AssistRequest(BaseModel):
+    userId: str
+    message: str = Field(..., min_length=1, max_length=1500)
+    installedStores: list[str] | None = Field(None, description="Shopping apps on the user's phone, when known")
+
+
+@router.post("/assist")
+async def assist(req: AssistRequest):
+    """One conversational turn with the Shopping Agent, without the general chat model around it. `handled` is false
+    when the message wasn't an order or an answer to a shopping question (the caller then uses normal chat)."""
+    result = await ShoppingAgent().run(req.message, {"userId": req.userId, "installedStores": req.installedStores})
+    a = result.data.get("assist")
+    if not a:
+        return {"handled": False}
+    return {"handled": True, **a, "cartOrder": result.data.get("cartOrder"), "providers": result.data.get("providers")}
+
+
+@router.delete("/assist/session")
+async def assist_reset(userId: str = Query(...)):
+    """Drop the shopping conversation in progress (the pending question)."""
+    sessions.clear(userId)
+    return {"cleared": True}
+
+
+@router.get("/policy", response_model=ShoppingPolicy)
+async def get_policy(userId: str = Query(...)):
+    """The user's purchase rules: what needs a confirmation, and what may be ordered automatically."""
+    return await load_policy(userId)
+
+
+@router.put("/policy", response_model=ShoppingPolicy)
+async def put_policy(policy: ShoppingPolicy, userId: str = Query(...)):
+    try:
+        await save_policy(userId, policy)
+    except ShoppingHistoryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return policy
+
+
+@router.get("/preferences")
+async def preferences(userId: str = Query(...)):
+    """What AURA has learnt about this user's shopping: usual products, stores, rhythm, price-vs-speed, with
+    confidence. Built from order history and past decisions."""
+    try:
+        events = await shopping_history.get_events(userId)
+    except ShoppingHistoryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return build_preferences(events).to_dict()
+
+
+@router.get("/providers")
+async def providers():
+    """Every shopping provider AURA knows, and what its integration can really do."""
+    return [{"name": p.name, "kind": p.kind, "androidPackage": p.android_package, "capabilities": p.capabilities}
+            for p in registry.all()]

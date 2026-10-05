@@ -4,9 +4,11 @@
  * as a local fallback when available.
  */
 import { Capacitor } from '@capacitor/core';
-import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 import { apiBlob } from './api';
 import { speakNow, stopSpeakingNow } from './speech';
+import { AuraSpeech } from '../native/speech';
+import { holdWake, releaseWake } from './wake';
+import { toast } from '../components/ui/primitives';
 
 export interface VoiceService {
   readonly supported: boolean;
@@ -29,33 +31,36 @@ const Ctor: (new () => SR) | undefined =
 
 const isNative = Capacitor.isNativePlatform();
 
-/** Android's WebView has no Web Speech API, so on-device recognition goes through the native plugin instead. */
+/** On the phone: Android's speech recognizer (the WebView has no Web Speech API). */
 function listenNative(onText: (text: string, final: boolean) => void, onEnd: () => void): () => void {
-  let last = '';
   let ended = false;
-  const handles: Promise<{ remove: () => Promise<void> }>[] = [];
-  const finish = () => {
+  const handles: { remove: () => Promise<void> }[] = [];
+  holdWake(); // "Hey Aura" detection releases the microphone while the command is captured
+  const finish = (error?: string) => {
     if (ended) return;
     ended = true;
-    if (last) onText(last, true);
-    handles.forEach((h) => void h.then((x) => x.remove()));
+    releaseWake();
+    handles.forEach((h) => void h.remove());
+    if (error && !/didn.t catch/i.test(error)) toast(error); // silence isn't worth a popup
     onEnd();
   };
-  handles.push(SpeechRecognition.addListener('partialResults', (d) => { last = d.matches?.[0] ?? last; if (last) onText(last, false); }));
-  handles.push(SpeechRecognition.addListener('listeningState', (d) => { if (d.status === 'stopped') finish(); }));
   void (async () => {
+    handles.push(await AuraSpeech.addListener('speechPartial', ({ text }) => onText(text, false)));
+    handles.push(await AuraSpeech.addListener('speechFinal', ({ text }) => onText(text, true)));
+    handles.push(await AuraSpeech.addListener('speechEnd', ({ error }) => finish(error)));
     try {
-      const perm = await SpeechRecognition.requestPermissions();
-      if (perm.speechRecognition !== 'granted') return finish();
-      await SpeechRecognition.start({ language: 'en-IN', partialResults: true, popup: false, maxResults: 1 });
-    } catch { finish(); }
+      await AuraSpeech.start({ lang: 'en-IN' });
+    } catch (e) {
+      finish(e instanceof Error ? e.message : 'Voice input could not start.');
+    }
   })();
-  return () => { void SpeechRecognition.stop().catch(() => undefined); };
+  return () => { void AuraSpeech.stop().catch(() => finish()); };
 }
 
 export const browserVoice: VoiceService = {
   supported: isNative || !!Ctor,
   listen(onText, onEnd) {
+    serverVoice.stop(); // never listen while AURA is talking: the mic would hear AURA's own voice
     if (isNative) return listenNative(onText, onEnd);
     if (!Ctor) { onEnd(); return () => {}; }
     const rec = new Ctor();
@@ -83,20 +88,26 @@ export const browserVoice: VoiceService = {
  * Falls back to the browser voice if the backend is unavailable. Resolves when playback ends.
  */
 let currentAudio: HTMLAudioElement | null = null;
+// Only the newest speak() may make sound. The audio is fetched first, which takes a moment: without this, a
+// second reply (or the user tapping the mic) during that wait ends with two voices talking over each other.
+let speakTurn = 0;
 export const serverVoice = {
   stop() {
     stopSpeakingNow();
+    speakTurn++;
     currentAudio?.pause();
     currentAudio = null;
     if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
   },
   async speak(text: string): Promise<void> {
     this.stop();
+    const turn = speakTurn;
     const trimmed = text.slice(0, 1800);
     // On the phone, speak with its own voice: it starts instantly instead of waiting for the server to generate audio.
     if (Capacitor.isNativePlatform()) { await speakNow(trimmed); return; }
     try {
       const blob = await apiBlob('/voice/speak', { text: trimmed });
+      if (turn !== speakTurn) return; // superseded while the audio was being prepared
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       currentAudio = audio;
@@ -107,7 +118,7 @@ export const serverVoice = {
       });
       URL.revokeObjectURL(url);
     } catch {
-      browserVoice.speak(trimmed);
+      if (turn === speakTurn) browserVoice.speak(trimmed);
     }
   },
 };

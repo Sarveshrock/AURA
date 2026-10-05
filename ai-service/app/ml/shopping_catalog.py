@@ -8,6 +8,7 @@ that user's own history, it just has no catalog prior.
 from __future__ import annotations
 
 import re
+from difflib import get_close_matches
 from functools import lru_cache
 
 # item -> (category, typical repurchase cycle in days, typical unit price INR, keywords)
@@ -105,8 +106,17 @@ _APP_ALIASES = {
     "swiggy instamart": "Swiggy Instamart", "swiggy": "Swiggy Instamart", "bigbasket": "BigBasket",
     "big basket": "BigBasket", "bb": "BigBasket", "jiomart": "JioMart", "jio mart": "JioMart",
     "amazon": "Amazon", "amazon fresh": "Amazon", "flipkart": "Flipkart", "flipkart minutes": "Flipkart",
-    "myntra": "Myntra", "aura": "AURA",
+    "myntra": "Myntra", "aura": "AURA", "zomato": "Zomato",
+    "ajio": "AJIO", "nykaa": "Nykaa", "meesho": "Meesho", "tata 1mg": "Tata 1mg", "1mg": "Tata 1mg",
+    "pharmeasy": "PharmEasy", "croma": "Croma", "dmart": "DMart Ready", "dmart ready": "DMart Ready",
+    # how speech recognition tends to write them
+    "blink it": "Blinkit", "blinket": "Blinkit", "blinkid": "Blinkit", "blanket": "Blinkit",
+    "zapto": "Zepto", "zapdo": "Zepto", "zepdo": "Zepto", "jepto": "Zepto", "septo": "Zepto", "zeptoh": "Zepto",
+    "insta mart": "Swiggy Instamart", "instamat": "Swiggy Instamart", "swiggi": "Swiggy Instamart",
+    "jomato": "Zomato", "zomatto": "Zomato", "somato": "Zomato", "flip kart": "Flipkart", "mintra": "Myntra",
+    "nika": "Nykaa", "nykaa fashion": "Nykaa", "misho": "Meesho", "big bucket": "BigBasket",
 }
+_COMPACT_ALIASES = {re.sub(r"[^a-z0-9]", "", k): v for k, v in _APP_ALIASES.items()}
 
 _KEYWORDS = sorted(((kw, item) for item, (*_, kws) in CATALOG.items() for kw in kws), key=lambda x: -len(x[0]))
 _QTY_WORDS = re.compile(r"\b(\d+(\.\d+)?\s*(kg|g|gm|gms|l|ltr|litre|liter|ml|pc|pcs|pack|packs|packet|packets|dozen|x)?)\b",
@@ -118,7 +128,18 @@ def canonical_app(name: str | None) -> str:
     if not name:
         return "none"
     key = re.sub(r"\s+", " ", str(name).strip().lower())
-    return _APP_ALIASES.get(key, str(name).strip())
+    if key in _APP_ALIASES:
+        return _APP_ALIASES[key]
+    # spoken commands arrive misspelt or split ("blink it", "zapdo", "big basket app"): ignore spacing and
+    # filler words, then take the closest known store if it is close enough
+    compact = re.sub(r"[^a-z0-9]", "", re.sub(r"\b(app|store|the|website|site|india)\b", " ", key))
+    if compact in _COMPACT_ALIASES:
+        return _COMPACT_ALIASES[compact]
+    if len(compact) >= 4:
+        close = get_close_matches(compact, list(_COMPACT_ALIASES), n=1, cutoff=0.8)
+        if close:
+            return _COMPACT_ALIASES[close[0]]
+    return str(name).strip()
 
 
 _KW_RES = [(re.compile(rf"(?<![a-z0-9]){re.escape(kw)}(?:s|es)?(?![a-z0-9])"), kw, item) for kw, item in _KEYWORDS]
@@ -154,6 +175,18 @@ def canonical_item(name: str | None) -> str:
     cleaned = re.sub(r"[|(),&]", " ", text)
     cleaned = re.sub(r"\s+", " ", _QTY_WORDS.sub(" ", cleaned)).strip(" -")
     return cleaned[:60] or "none"
+
+
+RESTAURANT_FOOD = "restaurant_food"
+FOOD_APPS = {"Zomato", "Swiggy", "EatSure", "Dominos", "Domino's"}
+
+
+def dish_item(name: str | None) -> str:
+    """A restaurant dish as an item: its own cleaned name ('Soya Chaap Biriyani Bowl' -> 'soya chaap biriyani bowl')."""
+    if not name:
+        return "none"
+    text = re.sub(r"[^a-z0-9\s&-]", " ", str(name).lower().replace("'", ""))
+    return re.sub(r"\s+", " ", text).strip(" -")[:60] or "none"
 
 
 def item_category(item: str) -> str:

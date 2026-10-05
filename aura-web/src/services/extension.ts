@@ -7,7 +7,7 @@ import { toast } from '../components/ui/primitives';
 
 /** The three stores the browser extension has scripts for (web only; the phone app works on any store). */
 export type QuickCartPlatform = 'blinkit' | 'zepto' | 'instamart';
-export interface QuickCartItem { name: string; qty: number }
+export interface QuickCartItem { name: string; qty: number; /** e.g. "from restaurant Biryani Zest" */ hint?: string }
 
 /** Stores AURA knows a direct search URL for. Any other store name works on the phone too. */
 export const KNOWN_STORES = ['Blinkit', 'Zepto', 'Swiggy Instamart', 'BigBasket', 'JioMart', 'Amazon', 'Flipkart', 'Myntra',
