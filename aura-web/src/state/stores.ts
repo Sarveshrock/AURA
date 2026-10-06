@@ -7,6 +7,7 @@ import type { Memory } from '../data/memories';
 import type { Transaction } from '../data/transactions';
 import type { Budget } from '../data/budgets';
 import type { Goal } from '../data/goals';
+import type { Commitment, MoneyPrefs } from '../data/commitments';
 import type { PlanId } from '../data/pricingPlans';
 import type { Paper, ResearchProject } from '../data/research';
 import type { Booking, TravelFeedback, TripPlan } from '../data/trips';
@@ -32,6 +33,9 @@ export const memoriesStore = createRecordStore<Memory>('memories');
 export const transactionsStore = createRecordStore<Transaction>('transactions');
 export const budgetsStore = createRecordStore<Budget>('budgets');
 export const goalsStore = createRecordStore<Goal>('goals');
+/** Rent, salary, EMIs, bills, SIPs: what the money plan schedules into the future. */
+export const commitmentsStore = createRecordStore<Commitment>('commitments');
+export const moneyPrefsStore = createRecordStore<MoneyPrefs>('money_prefs');
 export const savedPapersStore = createRecordStore<Paper>('papers');
 export const projectsStore = createRecordStore<ResearchProject>('research_projects');
 export const bookingsStore = createRecordStore<Booking>('bookings');

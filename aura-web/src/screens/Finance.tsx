@@ -7,10 +7,12 @@ import {
 import { Hud, IconBox, PageHero, NeonButton, BarChart, Donut, FilterDropdown, FuturisticModal, HudInput, SyncStatus, toast, type Tone } from '../components/aura';
 import { AICommandPanel, domainAsk } from '../components/ai';
 import { TransactionRow, BudgetCard, GoalCard, inr } from '../components/finance';
+import MoneyPlan, { usePlanInput } from '../components/finance/MoneyPlan';
+import { buildPlan, planContext } from '../services/moneyPlan';
 import type { Budget } from '../data/budgets';
 import { txColor, type TxCategory } from '../data/transactions';
 import { goalIcons, type Goal, type GoalIcon } from '../data/goals';
-import { transactionsStore, budgetsStore, goalsStore } from '../state/stores';
+import { transactionsStore, budgetsStore, goalsStore, commitmentsStore, moneyPrefsStore } from '../state/stores';
 import { uid } from '../state/store';
 import { usePageSearch, matches } from '../state/search';
 
@@ -31,6 +33,8 @@ export default function Finance() {
   const budgets = budgetsStore.use();
   const goals = goalsStore.use();
   const [hide, setHide] = useState(false);
+  const planInput = usePlanInput();
+  const plan = useMemo(() => buildPlan(planInput), [planInput]);
   const today = new Date();
   const year = today.getFullYear();
   const [month, setMonth] = useState(today.getMonth());
@@ -90,7 +94,9 @@ export default function Finance() {
   const ai = domainAsk('finance', () => JSON.stringify({
     month: MONTHS[month], income, expenses, savings, balance,
     spendingByCategory: Object.fromEntries(monthSpent), budgets: budgets.map((b) => ({ category: b.category, limit: b.limit, spent: monthSpent.get(b.category) ?? 0 })),
-    goals: goals.map((g) => ({ name: g.name, saved: g.saved, target: g.target })), currency: 'INR',
+    goals: goals.map((g) => ({ name: g.name, saved: g.saved, target: g.target, by: g.by })), currency: 'INR',
+    // the money plan, computed by the app: the assistant explains these numbers and must not make up its own
+    plan: planContext(plan),
   }));
 
   return (
@@ -124,6 +130,8 @@ export default function Finance() {
             </div>
           ))}
         </div>
+
+        <MoneyPlan hide={hide} input={planInput} plan={plan} />
 
         <div className="grid g2">
           <Hud corners>
@@ -162,7 +170,7 @@ export default function Finance() {
             {!budgets.length && <div className="empty">No budgets yet. Set one to track a spending limit.</div>}
           </Hud>
         </div>
-        <SyncStatus stores={[transactionsStore, budgetsStore, goalsStore]} />
+        <SyncStatus stores={[transactionsStore, budgetsStore, goalsStore, commitmentsStore, moneyPrefsStore]} />
       </div>
 
       <div className="rail">
@@ -241,11 +249,12 @@ function NewGoalDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   const [target, setTarget] = useState('');
   const [saved, setSaved] = useState('0');
+  const [by, setBy] = useState('');
   const [icon, setIcon] = useState<GoalIcon>('target');
   const save = (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !(Number(target) > 0)) return toast('Enter a goal name and a target above zero.');
-    goalsStore.set((gs) => [...gs, { id: uid('gl'), name: name.trim(), icon, tone: 'violet', saved: Math.max(0, Number(saved) || 0), target: Number(target) }]);
+    goalsStore.set((gs) => [...gs, { id: uid('gl'), name: name.trim(), icon, tone: 'violet', saved: Math.max(0, Number(saved) || 0), target: Number(target), ...(by ? { by } : {}) }]);
     onClose();
   };
   return (
@@ -254,6 +263,7 @@ function NewGoalDialog({ onClose }: { onClose: () => void }) {
         <HudInput label="Goal" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Emergency fund" autoFocus />
         <HudInput label="Target (₹)" type="number" min={1} value={target} onChange={(e) => setTarget(e.target.value)} />
         <HudInput label="Already saved (₹)" type="number" min={0} value={saved} onChange={(e) => setSaved(e.target.value)} />
+        <HudInput label="Want it by (optional)" type="date" value={by} onChange={(e) => setBy(e.target.value)} />
         <div className="field"><label>Icon</label><div className="seg">{(Object.keys(goalIcons) as GoalIcon[]).map((k) => { const I = goalIcons[k]; return <button type="button" key={k} className={`chip ${icon === k ? 'active' : ''}`} onClick={() => setIcon(k)} aria-label={k}><I size={16} /></button>; })}</div></div>
         <div className="row" style={{ justifyContent: 'flex-end' }}><NeonButton type="button" onClick={onClose}>Cancel</NeonButton><NeonButton type="submit" variant="primary">Create goal</NeonButton></div>
       </form>

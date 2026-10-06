@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { createStore } from '../state/store';
-import { companionPrefsStore, dayLogsStore, doseLogsStore, eventsStore, mealsStore, medicinesStore, tasksStore } from '../state/stores';
+import { budgetsStore, commitmentsStore, companionPrefsStore, dayLogsStore, doseLogsStore, eventsStore, goalsStore, mealsStore, medicinesStore, moneyPrefsStore, tasksStore, transactionsStore } from '../state/stores';
 import { uid } from '../state/store';
 import { TARGETS, type DayLog } from '../data/wellness';
 import { dosesForDate, doseState, isoDate, fmtTime, type Dose } from '../data/medicine';
@@ -13,6 +13,7 @@ import { shopAssist } from './shopping';
 import { startQuickCart } from './extension';
 import { AuraPhone } from '../native/phone';
 import { AuraScreen } from '../native/screen';
+import { moneyByVoice } from './moneyVoice';
 
 /**
  * AURA's voice companion — the part that behaves like a nurse + assistant + listener.
@@ -230,6 +231,11 @@ async function understandLocally(raw: string, nav: Nav, now: number): Promise<Ha
     savePrefs({ enabled: on, pausedUntil: undefined });
     return { say: on ? 'Check-ins are back on.' : 'Okay, I\'ve turned check-ins off. You can turn them back on from my panel.' };
   }
+
+  const moneyAnswer = moneyByVoice(t, {
+    now: new Date(), transactions: transactionsStore.get(), commitments: commitmentsStore.get(), goals: goalsStore.get(), budgets: budgetsStore.get(), prefs: moneyPrefsStore.get()[0],
+  });
+  if (moneyAnswer !== null) return { say: moneyAnswer };
 
   const open = t.match(/^(?:please )?(?:open|launch|kholo|chalu karo)\s+(?:the )?(.+?)(?: app)?$/);
   if (open && !/^(my |the )?(tasks?|calendar|wellness|shopping|chat|dashboard)\b/.test(open[1])) {

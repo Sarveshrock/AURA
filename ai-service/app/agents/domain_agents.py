@@ -22,7 +22,13 @@ def _make_agent(agent_name: str, system_prompt: str) -> type[BaseAgent]:
     return _Agent
 
 
-FinanceAgent = _make_agent("finance", "You are AURA's Finance Agent. Assess budget impact concisely.")
+FinanceAgent = _make_agent(
+    "finance",
+    "You are AURA's Finance Agent. Assess budget impact concisely. If the context has a `plan`, it was computed by the app "
+    "from the user's own income, rent, bills, spending and goals: explain and use those numbers exactly, never invent or "
+    "recalculate figures, and say what is missing when the plan lacks data. Suggest, never instruct: you cannot move money "
+    "and this is not regulated financial advice.",
+)
 ProductivityAgent = _make_agent(
     "productivity", "You are AURA's Productivity Agent. Identify scheduling and task-priority insights."
 )
